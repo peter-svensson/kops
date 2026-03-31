@@ -230,16 +230,15 @@ func (_ *Instance) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes
 			return fmt.Errorf("error rendering server group %s: computing unique name for server: %w", fi.ValueOf(expected.Name), err)
 		}
 
-		// Control plane instances always need a public IP for the API LB.
-		// Workers get private-only when attached to a private network (NAT gateway handles outbound).
-		needsPublicIP := fi.ValueOf(expected.Role) == scaleway.TagRoleControlPlane || expected.PrivateNetworkID == nil
+		// Scaleway requires routed_ip_enabled=true for all instances.
+		// Private network attachment is handled separately after creation.
 		createServerRequest := instance.CreateServerRequest{
 			Zone:            zone,
 			Name:            uniqueName,
 			CommercialType:  fi.ValueOf(expected.CommercialType),
 			Image:           expected.Image,
 			Tags:            expected.Tags,
-			RoutedIPEnabled: fi.PtrTo(needsPublicIP),
+			RoutedIPEnabled: fi.PtrTo(true),
 		}
 
 		// We resize the root volume if needed (for instance types with no local storage)
@@ -268,10 +267,16 @@ func (_ *Instance) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes
 
 		// Attach to private network if configured
 		if expected.PrivateNetworkID != nil {
+			// The private network ID may include a region prefix (e.g. "fr-par/uuid").
+			// The API expects a bare UUID.
+			pnID := fi.ValueOf(expected.PrivateNetworkID)
+			if parts := strings.SplitN(pnID, "/", 2); len(parts) == 2 {
+				pnID = parts[1]
+			}
 			nicResp, err := instanceService.CreatePrivateNIC(&instance.CreatePrivateNICRequest{
 				Zone:             zone,
 				ServerID:         srv.Server.ID,
-				PrivateNetworkID: fi.ValueOf(expected.PrivateNetworkID),
+				PrivateNetworkID: pnID,
 				Tags:             expected.Tags,
 			})
 			if err != nil {
