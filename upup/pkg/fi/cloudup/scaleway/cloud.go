@@ -529,29 +529,22 @@ func (s *scwCloudImplementation) GetProjectID() (string, error) {
 }
 
 func (s *scwCloudImplementation) GetServerIP(serverID string, zone scw.Zone) (string, error) {
-	region, err := zone.Region()
+	srv, err := s.instanceAPI.GetServer(&instance.GetServerRequest{
+		ServerID: serverID,
+		Zone:     zone,
+	})
 	if err != nil {
-		return "", fmt.Errorf("converting zone %s to region: %w", zone, err)
+		return "", fmt.Errorf("getting server %s: %w", serverID, err)
 	}
-
-	ips, err := s.ipamAPI.ListIPs(&ipam.ListIPsRequest{
-		Region:     region,
-		IsIPv6:     fi.PtrTo(false),
-		ResourceID: &serverID,
-		Zonal:      fi.PtrTo(zone.String()),
-	}, scw.WithAllPages())
-	if err != nil {
-		return "", fmt.Errorf("listing IPs for server %s: %w", serverID, err)
+	if srv.Server.PrivateIP != nil && *srv.Server.PrivateIP != "" {
+		return *srv.Server.PrivateIP, nil
 	}
-
-	if len(ips.IPs) < 1 {
-		return "", fmt.Errorf("could not find IP for server %s", serverID)
+	for _, ip := range srv.Server.PublicIPs {
+		if ip != nil && ip.Address != nil {
+			return ip.Address.String(), nil
+		}
 	}
-	if len(ips.IPs) > 1 {
-		klog.V(10).Infof("Found more than 1 IP for server %s, using %s", serverID, ips.IPs[0].Address.IP.String())
-	}
-
-	return ips.IPs[0].Address.IP.String(), nil
+	return "", fmt.Errorf("no IP found for server %s", serverID)
 }
 
 func (s *scwCloudImplementation) DeleteBlockVolume(volume *block.Volume) error {
