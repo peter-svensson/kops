@@ -99,24 +99,36 @@ func (v scalewayVerifier) VerifyToken(ctx context.Context, rawRequest *http.Requ
 	}
 	server := serverResponse.Server
 
+	// Try IPAM first for private IPs, fall back to Instance API for routed-IP instances
+	var addresses []string
 	ips, err := ipam.NewAPI(scwClient).ListIPs(&ipam.ListIPsRequest{
 		Region:     region,
 		ResourceID: fi.PtrTo(server.ID),
 		IsIPv6:     fi.PtrTo(false),
 		Zonal:      fi.PtrTo(zone.String()),
 	}, scw.WithContext(ctx), scw.WithAllPages())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get IP for server %q: %w", server.Name, err)
+	if err == nil && ips.TotalCount > 0 {
+		for _, ip := range ips.IPs {
+			addresses = append(addresses, ip.Address.IP.String())
+		}
+	} else {
+		// Routed-IP instances don't have IPAM entries; use Instance API
+		if server.PrivateIP != nil && *server.PrivateIP != "" {
+			addresses = append(addresses, *server.PrivateIP)
+		}
+		for _, ip := range server.PublicIPs {
+			if ip != nil && ip.Address != nil {
+				addresses = append(addresses, ip.Address.String())
+			}
+		}
 	}
-	if ips.TotalCount == 0 {
-		return nil, fmt.Errorf("no IP found for server %q: %w", server.Name, err)
+	if len(addresses) == 0 {
+		return nil, fmt.Errorf("no IP found for server %q", server.Name)
 	}
 
-	addresses := []string(nil)
-	challengeEndPoints := []string(nil)
-	for _, ip := range ips.IPs {
-		addresses = append(addresses, ip.Address.IP.String())
-		challengeEndPoints = append(challengeEndPoints, net.JoinHostPort(ip.Address.IP.String(), strconv.Itoa(wellknownports.NodeupChallenge)))
+	challengeEndPoints := make([]string, 0, len(addresses))
+	for _, addr := range addresses {
+		challengeEndPoints = append(challengeEndPoints, net.JoinHostPort(addr, strconv.Itoa(wellknownports.NodeupChallenge)))
 	}
 
 	result := &bootstrap.VerifyResult{
