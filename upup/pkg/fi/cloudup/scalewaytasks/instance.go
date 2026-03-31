@@ -230,13 +230,16 @@ func (_ *Instance) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes
 			return fmt.Errorf("error rendering server group %s: computing unique name for server: %w", fi.ValueOf(expected.Name), err)
 		}
 
+		// Control plane instances always need a public IP for the API LB.
+		// Workers get private-only when attached to a private network (NAT gateway handles outbound).
+		needsPublicIP := fi.ValueOf(expected.Role) == scaleway.TagRoleControlPlane || expected.PrivateNetworkID == nil
 		createServerRequest := instance.CreateServerRequest{
 			Zone:            zone,
 			Name:            uniqueName,
 			CommercialType:  fi.ValueOf(expected.CommercialType),
 			Image:           expected.Image,
 			Tags:            expected.Tags,
-			RoutedIPEnabled: fi.PtrTo(true),
+			RoutedIPEnabled: fi.PtrTo(needsPublicIP),
 		}
 
 		// We resize the root volume if needed (for instance types with no local storage)

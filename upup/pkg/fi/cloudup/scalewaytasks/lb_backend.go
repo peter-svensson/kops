@@ -243,7 +243,7 @@ func (l *LBBackend) TerraformLink() *terraformWriter.Literal {
 }
 
 func getControlPlanesIPs(scwCloud scaleway.ScwCloud, lb *LoadBalancer, zone scw.Zone) ([]string, error) {
-	var controlPlanePrivateIPs []string
+	var controlPlaneIPs []string
 
 	servers, err := scwCloud.GetClusterServers(scwCloud.ClusterName(lb.Tags), nil)
 	if err != nil {
@@ -254,12 +254,25 @@ func getControlPlanesIPs(scwCloud scaleway.ScwCloud, lb *LoadBalancer, zone scw.
 		if role := scaleway.InstanceRoleFromTags(server.Tags); role != scaleway.TagRoleControlPlane {
 			continue
 		}
-		ip, err := scwCloud.GetServerIP(server.ID, server.Zone)
-		if err != nil {
-			return nil, fmt.Errorf("getting IP of server %s for load-balancer's back-end: %w", server.Name, err)
+		// The LB needs a routable IP. Use the public IP since the LB
+		// may not be on the same private network as the instances.
+		var ip string
+		for _, publicIP := range server.PublicIPs {
+			if publicIP != nil && publicIP.Address != nil {
+				ip = publicIP.Address.String()
+				break
+			}
 		}
-		controlPlanePrivateIPs = append(controlPlanePrivateIPs, ip)
+		if ip == "" {
+			// Fall back to GetServerIP (returns private IP if available)
+			var err error
+			ip, err = scwCloud.GetServerIP(server.ID, server.Zone)
+			if err != nil {
+				return nil, fmt.Errorf("getting IP of server %s for load-balancer's back-end: %w", server.Name, err)
+			}
+		}
+		controlPlaneIPs = append(controlPlaneIPs, ip)
 	}
 
-	return controlPlanePrivateIPs, nil
+	return controlPlaneIPs, nil
 }
