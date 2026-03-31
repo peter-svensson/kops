@@ -47,12 +47,15 @@ type Instance struct {
 	VolumeSize     *int
 	NeedsUpdate    []string
 
-	UserData     *fi.Resource
-	LoadBalancer *LoadBalancer
+	UserData         *fi.Resource
+	LoadBalancer     *LoadBalancer
+	PrivateNetworkID *string
 }
 
-var _ fi.CloudupTask = (*Instance)(nil)
-var _ fi.CompareWithID = (*Instance)(nil)
+var (
+	_ fi.CloudupTask   = (*Instance)(nil)
+	_ fi.CompareWithID = (*Instance)(nil)
+)
 
 func (s *Instance) CompareWithID() *string {
 	return s.Name
@@ -131,7 +134,7 @@ func (s *Instance) Find(c *fi.CloudupContext) (*Instance, error) {
 		return nil, err
 	}
 
-	return &Instance{
+	found := &Instance{
 		Name:           fi.PtrTo(igName),
 		Lifecycle:      s.Lifecycle,
 		Zone:           fi.PtrTo(server.Zone.String()),
@@ -142,7 +145,11 @@ func (s *Instance) Find(c *fi.CloudupContext) (*Instance, error) {
 		Count:          len(servers),
 		NeedsUpdate:    needsUpdate,
 		UserData:       s.UserData,
-	}, nil
+	}
+	if len(server.PrivateNics) > 0 {
+		found.PrivateNetworkID = fi.PtrTo(server.PrivateNics[0].PrivateNetworkID)
+	}
+	return found, nil
 }
 
 func (s *Instance) Run(c *fi.CloudupContext) error {
@@ -156,6 +163,9 @@ func (_ *Instance) CheckChanges(actual, expected, changes *Instance) error {
 		}
 		if changes.Zone != nil {
 			return fi.CannotChangeField("Zone")
+		}
+		if changes.PrivateNetworkID != nil {
+			return fi.CannotChangeField("PrivateNetworkID")
 		}
 	} else {
 		if expected.Name == nil {
@@ -226,7 +236,7 @@ func (_ *Instance) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes
 			CommercialType:  fi.ValueOf(expected.CommercialType),
 			Image:           expected.Image,
 			Tags:            expected.Tags,
-			RoutedIPEnabled: fi.PtrTo(true),
+			RoutedIPEnabled: fi.PtrTo(expected.PrivateNetworkID == nil),
 		}
 
 		// We resize the root volume if needed (for instance types with no local storage)
@@ -251,6 +261,31 @@ func (_ *Instance) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes
 		})
 		if err != nil {
 			return fmt.Errorf("error waiting for instance %s of group %q: %w", srv.Server.ID, fi.ValueOf(expected.Name), err)
+		}
+
+		// Attach to private network if configured
+		if expected.PrivateNetworkID != nil {
+			nicResp, err := instanceService.CreatePrivateNIC(&instance.CreatePrivateNICRequest{
+				Zone:             zone,
+				ServerID:         srv.Server.ID,
+				PrivateNetworkID: fi.ValueOf(expected.PrivateNetworkID),
+				Tags:             expected.Tags,
+			})
+			if err != nil {
+				return fmt.Errorf("error attaching instance %s to private network %s: %w",
+					srv.Server.ID, fi.ValueOf(expected.PrivateNetworkID), err)
+			}
+			nic, err := instanceService.WaitForPrivateNIC(&instance.WaitForPrivateNICRequest{
+				ServerID:     srv.Server.ID,
+				PrivateNicID: nicResp.PrivateNic.ID,
+				Zone:         zone,
+			})
+			if err != nil {
+				return fmt.Errorf("error waiting for private NIC on instance %s: %w", srv.Server.ID, err)
+			}
+			if nic.State == instance.PrivateNICStateSyncingError {
+				return fmt.Errorf("private NIC on instance %s entered syncing_error state", srv.Server.ID)
+			}
 		}
 
 		// We load the cloud-init script in the instance user data
@@ -308,6 +343,11 @@ type terraformInstanceIP struct {
 	Tags []string `cty:"tags"`
 }
 
+type terraformInstancePrivateNIC struct {
+	ServerID         *terraformWriter.Literal `cty:"server_id"`
+	PrivateNetworkID *string                  `cty:"private_network_id"`
+}
+
 type terraformInstance struct {
 	Name                *string                             `cty:"name"`
 	IPID                *terraformWriter.Literal            `cty:"ip_id"`
@@ -329,13 +369,18 @@ func (_ *Instance) RenderTerraform(t *terraform.TerraformTarget, actual, expecte
 
 		tfInstance := terraformInstance{
 			Name:                &uniqueName,
-			IPID:                terraformWriter.LiteralProperty("scaleway_instance_ip", tfName, "id"),
 			Type:                expected.CommercialType,
 			Tags:                expected.Tags,
 			Image:               expected.Image,
-			EnableDynamicIP:     fi.PtrTo(true),
 			ReplaceOnTypeChange: fi.PtrTo(false),
 			Lifecycle:           nil,
+		}
+
+		if expected.PrivateNetworkID == nil {
+			tfInstance.IPID = terraformWriter.LiteralProperty("scaleway_instance_ip", tfName, "id")
+			tfInstance.EnableDynamicIP = fi.PtrTo(true)
+		} else {
+			tfInstance.EnableDynamicIP = fi.PtrTo(false)
 		}
 
 		// We load the cloud-init script in the instance user data
@@ -373,22 +418,35 @@ func (_ *Instance) RenderTerraform(t *terraform.TerraformTarget, actual, expecte
 			}
 		}
 
-		// We create an IP for the server (we only render it now to avoid duplicates if Instance task fails)
-		tfInstanceIP := terraformInstanceIP{}
-		for _, tag := range expected.Tags {
-			if strings.HasPrefix(tag, scaleway.TagClusterName) {
-				tfInstanceIP.Tags = []string{tag}
-				break
+		if expected.PrivateNetworkID == nil {
+			// Public mode: create an IP for the server
+			tfInstanceIP := terraformInstanceIP{}
+			for _, tag := range expected.Tags {
+				if strings.HasPrefix(tag, scaleway.TagClusterName) {
+					tfInstanceIP.Tags = []string{tag}
+					break
+				}
+			}
+			err := t.RenderResource("scaleway_instance_ip", tfName, tfInstanceIP)
+			if err != nil {
+				return err
 			}
 		}
-		err := t.RenderResource("scaleway_instance_ip", tfName, tfInstanceIP)
+
+		err := t.RenderResource("scaleway_instance_server", tfName, tfInstance)
 		if err != nil {
 			return err
 		}
 
-		err = t.RenderResource("scaleway_instance_server", tfName, tfInstance)
-		if err != nil {
-			return err
+		if expected.PrivateNetworkID != nil {
+			tfNIC := terraformInstancePrivateNIC{
+				ServerID:         terraformWriter.LiteralProperty("scaleway_instance_server", tfName, "id"),
+				PrivateNetworkID: expected.PrivateNetworkID,
+			}
+			err = t.RenderResource("scaleway_instance_private_nic", tfName, tfNIC)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/scaleway/scaleway-sdk-go/scw"
+	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/model"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
@@ -29,8 +30,10 @@ import (
 
 var commercialTypesWithBlockStorageOnly = []string{"PRO", "PLAY", "ENT"}
 
-const defaultNodeRootVolumeSizeGB = 50
-const defaultControlPlaneRootVolumeSizeGB = 20
+const (
+	defaultNodeRootVolumeSizeGB         = 50
+	defaultControlPlaneRootVolumeSizeGB = 20
+)
 
 // InstanceModelBuilder configures instances for the cluster
 type InstanceModelBuilder struct {
@@ -48,6 +51,11 @@ func (b *InstanceModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		zone, err := scw.ParseZone(ig.Spec.Subnets[0])
 		if err != nil {
 			return fmt.Errorf("error building instance task for %q: %w", name, err)
+		}
+
+		subnets, err := b.GatherSubnets(ig)
+		if err != nil {
+			return fmt.Errorf("error gathering subnets for %q: %w", name, err)
 		}
 
 		userData, err := b.BootstrapScriptBuilder.ResourceNodeUp(c, ig)
@@ -72,6 +80,13 @@ func (b *InstanceModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			Image:          fi.PtrTo(ig.Spec.Image),
 			UserData:       &userData,
 			Tags:           instanceTags,
+		}
+
+		if len(subnets) > 0 && subnets[0].Type == kops.SubnetTypePrivate {
+			if subnets[0].ID == "" {
+				return fmt.Errorf("private subnet %q for instance group %q must have an ID (Scaleway Private Network UUID)", subnets[0].Name, name)
+			}
+			instance.PrivateNetworkID = fi.PtrTo(subnets[0].ID)
 		}
 
 		if ig.IsControlPlane() {
