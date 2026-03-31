@@ -236,7 +236,7 @@ func (_ *Instance) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes
 			CommercialType:  fi.ValueOf(expected.CommercialType),
 			Image:           expected.Image,
 			Tags:            expected.Tags,
-			RoutedIPEnabled: fi.PtrTo(expected.PrivateNetworkID == nil),
+			RoutedIPEnabled: fi.PtrTo(true),
 		}
 
 		// We resize the root volume if needed (for instance types with no local storage)
