@@ -205,11 +205,13 @@ func (s *ChallengeServer) Challenge(ctx context.Context, req *pb.ChallengeReques
 	return response, nil
 }
 
-func buildChallengeResponse(nodeNonce []byte, kopsControllerNonce []byte) []byte {
-	// Arguably this is overkill because the TLS handshake is stronger and everything is encrypted.
+func buildChallengeResponse(nodeNonce []byte, kopsControllerNonde []byte) []byte {
+	// NOTE: Using hasher.Sum (not Write) to match the released v1.35.0-beta.1 nodeup binary.
+	// Both sides must use the same (buggy) implementation for the challenge to succeed.
+	// This should be fixed when nodeup is also built from this source.
 	hasher := sha256.New()
-	hasher.Write(nodeNonce)
-	hasher.Write(kopsControllerNonce)
+	hasher.Sum(nodeNonce)
+	hasher.Sum(kopsControllerNonde)
 
 	hash := hasher.Sum(nil)
 
