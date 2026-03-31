@@ -44,8 +44,10 @@ type LBBackend struct {
 	LoadBalancer *LoadBalancer
 }
 
-var _ fi.CloudupTask = (*LBBackend)(nil)
-var _ fi.CompareWithID = (*LBBackend)(nil)
+var (
+	_ fi.CloudupTask   = (*LBBackend)(nil)
+	_ fi.CompareWithID = (*LBBackend)(nil)
+)
 
 var _ fi.CloudupHasDependencies = (*LBBackend)(nil)
 
@@ -249,7 +251,7 @@ func getControlPlanesIPs(scwCloud scaleway.ScwCloud, lb *LoadBalancer, zone scw.
 	}
 
 	for _, server := range servers {
-		if role := scaleway.InstanceRoleFromTags(server.Tags); role == scaleway.TagRoleWorker {
+		if role := scaleway.InstanceRoleFromTags(server.Tags); role != scaleway.TagRoleControlPlane {
 			continue
 		}
 		ip, err := scwCloud.GetServerIP(server.ID, server.Zone)
