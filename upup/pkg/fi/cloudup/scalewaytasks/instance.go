@@ -230,15 +230,16 @@ func (_ *Instance) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes
 			return fmt.Errorf("error rendering server group %s: computing unique name for server: %w", fi.ValueOf(expected.Name), err)
 		}
 
-		// Scaleway requires routed_ip_enabled=true for all instances.
-		// Private network attachment is handled separately after creation.
+		// Control plane needs a public IP for the API LB.
+		// Workers on a private network don't need one — the Public Gateway provides NAT.
+		needsPublicIP := fi.ValueOf(expected.Role) == scaleway.TagRoleControlPlane || expected.PrivateNetworkID == nil
 		createServerRequest := instance.CreateServerRequest{
-			Zone:            zone,
-			Name:            uniqueName,
-			CommercialType:  fi.ValueOf(expected.CommercialType),
-			Image:           expected.Image,
-			Tags:            expected.Tags,
-			RoutedIPEnabled: fi.PtrTo(true),
+			Zone:              zone,
+			Name:              uniqueName,
+			CommercialType:    fi.ValueOf(expected.CommercialType),
+			Image:             expected.Image,
+			Tags:              expected.Tags,
+			DynamicIPRequired: fi.PtrTo(needsPublicIP),
 		}
 
 		// We resize the root volume if needed (for instance types with no local storage)
@@ -293,30 +294,6 @@ func (_ *Instance) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes
 			}
 			if nic.State == instance.PrivateNICStateSyncingError {
 				return fmt.Errorf("private NIC on instance %s entered syncing_error state", srv.Server.ID)
-			}
-		}
-
-		// For worker nodes on a private network, remove the public IP.
-		// The Public Gateway provides NAT for outbound internet access.
-		// Control plane nodes keep their public IP for the API LB.
-		if expected.PrivateNetworkID != nil && fi.ValueOf(expected.Role) != scaleway.TagRoleControlPlane {
-			if srv.Server.PublicIP != nil {
-				_, err = instanceService.UpdateIP(&instance.UpdateIPRequest{
-					Zone:   zone,
-					IP:     srv.Server.PublicIP.ID,
-					Server: &instance.NullableStringValue{Null: true},
-				})
-				if err != nil {
-					return fmt.Errorf("error detaching public IP from instance %s: %w", srv.Server.ID, err)
-				}
-				// Delete the dynamic IP to avoid leaking
-				err = instanceService.DeleteIP(&instance.DeleteIPRequest{
-					Zone: zone,
-					IP:   srv.Server.PublicIP.ID,
-				})
-				if err != nil {
-					return fmt.Errorf("error deleting public IP for instance %s: %w", srv.Server.ID, err)
-				}
 			}
 		}
 
