@@ -242,33 +242,41 @@ func (l *LBBackend) TerraformLink() *terraformWriter.Literal {
 	return terraformWriter.LiteralProperty("scaleway_lb_backend", fi.ValueOf(l.Name), "id")
 }
 
-func getControlPlanesIPs(scwCloud scaleway.ScwCloud, lb *LoadBalancer, zone scw.Zone) ([]string, error) {
+func getControlPlanesIPs(scwCloud scaleway.ScwCloud, loadBalancer *LoadBalancer, zone scw.Zone) ([]string, error) {
 	var controlPlaneIPs []string
 
-	servers, err := scwCloud.GetClusterServers(scwCloud.ClusterName(lb.Tags), nil)
+	servers, err := scwCloud.GetClusterServers(scwCloud.ClusterName(loadBalancer.Tags), nil)
 	if err != nil {
 		return nil, fmt.Errorf("getting cluster servers for load-balancer's back-end: %w", err)
 	}
+
+	usePrivate := loadBalancer.PrivateNetworkID != nil
 
 	for _, server := range servers {
 		if role := scaleway.InstanceRoleFromTags(server.Tags); role != scaleway.TagRoleControlPlane {
 			continue
 		}
-		// The LB needs a routable IP. Use the public IP since the LB
-		// may not be on the same private network as the instances.
+
 		var ip string
-		for _, publicIP := range server.PublicIPs {
-			if publicIP != nil && publicIP.Address != nil {
-				ip = publicIP.Address.String()
-				break
-			}
-		}
-		if ip == "" {
-			// Fall back to GetServerIP (returns private IP if available)
-			var err error
+		if usePrivate {
+			// LB is on the same private network — use private IPs
 			ip, err = scwCloud.GetServerIP(server.ID, server.Zone)
 			if err != nil {
-				return nil, fmt.Errorf("getting IP of server %s for load-balancer's back-end: %w", server.Name, err)
+				return nil, fmt.Errorf("getting private IP of server %s for load-balancer's back-end: %w", server.Name, err)
+			}
+		} else {
+			// LB is not on a private network — use public IPs
+			for _, publicIP := range server.PublicIPs {
+				if publicIP != nil && publicIP.Address != nil {
+					ip = publicIP.Address.String()
+					break
+				}
+			}
+			if ip == "" {
+				ip, err = scwCloud.GetServerIP(server.ID, server.Zone)
+				if err != nil {
+					return nil, fmt.Errorf("getting IP of server %s for load-balancer's back-end: %w", server.Name, err)
+				}
 			}
 		}
 		controlPlaneIPs = append(controlPlaneIPs, ip)

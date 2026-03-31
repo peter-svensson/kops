@@ -47,13 +47,19 @@ type LoadBalancer struct {
 	Description           string
 	SslCompatibilityLevel string
 
+	// PrivateNetworkID attaches the LB to a private network so it can
+	// reach backend instances that have no public IP.
+	PrivateNetworkID *string
+
 	// WellKnownServices indicates which services are supported by this resource.
 	// This field is internal and is not rendered to the cloud.
 	WellKnownServices []wellknownservices.WellKnownService
 }
 
-var _ fi.CompareWithID = (*LoadBalancer)(nil)
-var _ fi.HasAddress = (*LoadBalancer)(nil)
+var (
+	_ fi.CompareWithID = (*LoadBalancer)(nil)
+	_ fi.HasAddress    = (*LoadBalancer)(nil)
+)
 
 func (l *LoadBalancer) CompareWithID() *string {
 	return l.LBID
@@ -86,7 +92,7 @@ func (l *LoadBalancer) Find(context *fi.CloudupContext) (*LoadBalancer, error) {
 		lbIPs = append(lbIPs, IP.IPAddress)
 	}
 
-	return &LoadBalancer{
+	found := &LoadBalancer{
 		Name:              fi.PtrTo(loadBalancer.Name),
 		LBID:              fi.PtrTo(loadBalancer.ID),
 		Zone:              fi.PtrTo(string(loadBalancer.Zone)),
@@ -94,7 +100,24 @@ func (l *LoadBalancer) Find(context *fi.CloudupContext) (*LoadBalancer, error) {
 		Tags:              loadBalancer.Tags,
 		Lifecycle:         l.Lifecycle,
 		WellKnownServices: l.WellKnownServices,
-	}, nil
+	}
+
+	// Check if the LB already has a private network attached
+	pnResp, err := lbService.ListLBPrivateNetworks(&lb.ZonedAPIListLBPrivateNetworksRequest{
+		Zone: loadBalancer.Zone,
+		LBID: loadBalancer.ID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing private networks for load-balancer %s: %w", loadBalancer.ID, err)
+	}
+	for _, pn := range pnResp.PrivateNetwork {
+		if pn.Status == lb.PrivateNetworkStatusReady || pn.Status == lb.PrivateNetworkStatusPending {
+			found.PrivateNetworkID = fi.PtrTo(pn.PrivateNetworkID)
+			break
+		}
+	}
+
+	return found, nil
 }
 
 func (l *LoadBalancer) FindAddresses(context *fi.CloudupContext) ([]string, error) {
@@ -206,6 +229,41 @@ func (l *LoadBalancer) RenderScw(t *scaleway.ScwAPITarget, actual, expected, cha
 
 	}
 
+	// Attach private network if configured and not already attached
+	if expected.PrivateNetworkID != nil {
+		pnID := fi.ValueOf(expected.PrivateNetworkID)
+		if parts := strings.SplitN(pnID, "/", 2); len(parts) == 2 {
+			pnID = parts[1]
+		}
+
+		alreadyAttached := false
+		if actual != nil && actual.PrivateNetworkID != nil {
+			alreadyAttached = true
+		}
+
+		if !alreadyAttached {
+			zone := scw.Zone(fi.ValueOf(expected.Zone))
+			klog.Infof("Attaching load-balancer %q to private network %s", fi.ValueOf(expected.Name), pnID)
+
+			_, err := lbService.AttachPrivateNetwork(&lb.ZonedAPIAttachPrivateNetworkRequest{
+				Zone:             zone,
+				LBID:             fi.ValueOf(expected.LBID),
+				PrivateNetworkID: pnID,
+			})
+			if err != nil {
+				return fmt.Errorf("attaching load-balancer to private network %s: %w", pnID, err)
+			}
+
+			_, err = lbService.WaitForLBPN(&lb.ZonedAPIWaitForLBPNRequest{
+				LBID: fi.ValueOf(expected.LBID),
+				Zone: zone,
+			})
+			if err != nil {
+				return fmt.Errorf("waiting for load-balancer private network attachment: %w", err)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -217,6 +275,11 @@ type terraformLoadBalancer struct {
 	Description string                   `cty:"description"`
 	Tags        []string                 `cty:"tags"`
 	IPID        *terraformWriter.Literal `cty:"ip_id"`
+}
+
+type terraformLBPrivateNetwork struct {
+	LBID             *terraformWriter.Literal `cty:"lb_id"`
+	PrivateNetworkID *string                  `cty:"private_network_id"`
 }
 
 func (_ *LoadBalancer) RenderTerraform(t *terraform.TerraformTarget, actual, expected, changes *LoadBalancer) error {
@@ -235,7 +298,23 @@ func (_ *LoadBalancer) RenderTerraform(t *terraform.TerraformTarget, actual, exp
 		Tags:        expected.Tags,
 		IPID:        terraformWriter.LiteralProperty("scaleway_lb_ip", tfName, "id"),
 	}
-	return t.RenderResource("scaleway_lb", tfName, tfLB)
+	err = t.RenderResource("scaleway_lb", tfName, tfLB)
+	if err != nil {
+		return err
+	}
+
+	if expected.PrivateNetworkID != nil {
+		tfPN := terraformLBPrivateNetwork{
+			LBID:             terraformWriter.LiteralProperty("scaleway_lb", tfName, "id"),
+			PrivateNetworkID: expected.PrivateNetworkID,
+		}
+		err = t.RenderResource("scaleway_lb_private_network", tfName, tfPN)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (l *LoadBalancer) TerraformLink() *terraformWriter.Literal {

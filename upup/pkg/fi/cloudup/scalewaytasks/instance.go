@@ -230,9 +230,9 @@ func (_ *Instance) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes
 			return fmt.Errorf("error rendering server group %s: computing unique name for server: %w", fi.ValueOf(expected.Name), err)
 		}
 
-		// Control plane needs a public IP for the API LB.
-		// Workers on a private network don't need one — the Public Gateway provides NAT.
-		needsPublicIP := fi.ValueOf(expected.Role) == scaleway.TagRoleControlPlane || expected.PrivateNetworkID == nil
+		// Instances on a private network use the Public Gateway for NAT.
+		// The LB is attached to the same private network to reach backends.
+		needsPublicIP := expected.PrivateNetworkID == nil
 		createServerRequest := instance.CreateServerRequest{
 			Zone:              zone,
 			Name:              uniqueName,

@@ -69,6 +69,23 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 		lbTags = append(lbTags, fmt.Sprintf("%s=%s", k, v))
 	}
 
+	// If control plane instance groups use a private subnet, attach the LB
+	// to the same private network so it can reach backends without public IPs.
+	var privateNetworkID *string
+	for _, ig := range b.InstanceGroups {
+		if !ig.IsControlPlane() {
+			continue
+		}
+		subnets, err := b.GatherSubnets(ig)
+		if err != nil {
+			return fmt.Errorf("gathering subnets for %q: %w", ig.Name, err)
+		}
+		if len(subnets) > 0 && subnets[0].Type == kops.SubnetTypePrivate && subnets[0].ID != "" {
+			privateNetworkID = fi.PtrTo(subnets[0].ID)
+			break
+		}
+	}
+
 	loadBalancerName := "api." + b.ClusterName()
 	loadBalancer := &scalewaytasks.LoadBalancer{
 		Name:                  fi.PtrTo(loadBalancerName),
@@ -78,6 +95,7 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 		Tags:                  lbTags,
 		Description:           "Load-balancer for kops cluster " + b.ClusterName(),
 		SslCompatibilityLevel: string(lb.SSLCompatibilityLevelSslCompatibilityLevelUnknown),
+		PrivateNetworkID:      privateNetworkID,
 	}
 
 	c.AddTask(loadBalancer)
