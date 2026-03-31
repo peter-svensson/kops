@@ -30,7 +30,7 @@ func KopsVersionImageTag() string {
 
 // These constants are parsed by build tooling - be careful about changing the formats
 const (
-	KOPS_RELEASE_VERSION = "1.35.0-beta.1"
+	KOPS_RELEASE_VERSION = "1.35.0"
 	KOPS_CI_VERSION      = "1.35.0-beta.2"
 )
 
