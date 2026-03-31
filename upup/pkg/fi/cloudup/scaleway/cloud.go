@@ -21,6 +21,7 @@ import (
 	"os"
 	"strings"
 
+	block "github.com/scaleway/scaleway-sdk-go/api/block/v1alpha1"
 	domain "github.com/scaleway/scaleway-sdk-go/api/domain/v2beta1"
 	iam "github.com/scaleway/scaleway-sdk-go/api/iam/v1alpha1"
 	"github.com/scaleway/scaleway-sdk-go/api/instance/v1"
@@ -59,6 +60,7 @@ type ScwCloud interface {
 	Region() string
 	Zone() string
 
+	BlockService() *block.API
 	DomainService() *domain.API
 	IamService() *iam.API
 	InstanceService() *instance.API
@@ -75,13 +77,16 @@ type ScwCloud interface {
 	GetApiIngressStatus(cluster *kops.Cluster) ([]fi.ApiIngressStatus, error)
 	GetCloudGroups(cluster *kops.Cluster, instancegroups []*kops.InstanceGroup, warnUnmatched bool, nodes []v1.Node) (map[string]*cloudinstances.CloudInstanceGroup, error)
 
+	GetClusterBlockVolumes(clusterName string) ([]*block.Volume, error)
 	GetClusterDNSRecords(clusterName string) ([]*domain.Record, error)
 	GetClusterLoadBalancers(clusterName string) ([]*lb.LB, error)
 	GetClusterServers(clusterName string, instanceGroupName *string) ([]*instance.Server, error)
 	GetClusterSSHKeys(clusterName string) ([]*iam.SSHKey, error)
 	GetClusterVolumes(clusterName string) ([]*instance.Volume, error)
+	GetProjectID() (string, error)
 	GetServerIP(serverID string, zone scw.Zone) (string, error)
 
+	DeleteBlockVolume(volume *block.Volume) error
 	DeleteDNSRecord(record *domain.Record, clusterName string) error
 	DeleteLoadBalancer(loadBalancer *lb.LB) error
 	DeleteServer(server *instance.Server) error
@@ -100,6 +105,7 @@ type scwCloudImplementation struct {
 	dns    dnsprovider.Interface
 	tags   map[string]string
 
+	blockAPI       *block.API
 	domainAPI      *domain.API
 	iamAPI         *iam.API
 	instanceAPI    *instance.API
@@ -155,6 +161,7 @@ func NewScwCloud(tags map[string]string) (ScwCloud, error) {
 		zone:           zone,
 		dns:            dns.NewProvider(domain.NewAPI(scwClient)),
 		tags:           tags,
+		blockAPI:       block.NewAPI(scwClient),
 		domainAPI:      domain.NewAPI(scwClient),
 		iamAPI:         iam.NewAPI(scwClient),
 		instanceAPI:    instance.NewAPI(scwClient),
@@ -192,6 +199,10 @@ func (s *scwCloudImplementation) Region() string {
 
 func (s *scwCloudImplementation) Zone() string {
 	return string(s.zone)
+}
+
+func (s *scwCloudImplementation) BlockService() *block.API {
+	return s.blockAPI
 }
 
 func (s *scwCloudImplementation) DomainService() *domain.API {
@@ -484,6 +495,17 @@ func (s *scwCloudImplementation) GetClusterSSHKeys(clusterName string) ([]*iam.S
 	return clusterSSHKeys, nil
 }
 
+func (s *scwCloudImplementation) GetClusterBlockVolumes(clusterName string) ([]*block.Volume, error) {
+	volumes, err := s.blockAPI.ListVolumes(&block.ListVolumesRequest{
+		Zone: s.zone,
+		Tags: []string{TagClusterName + "=" + clusterName},
+	}, scw.WithAllPages())
+	if err != nil {
+		return nil, fmt.Errorf("listing cluster block volumes: %w", err)
+	}
+	return volumes.Volumes, nil
+}
+
 func (s *scwCloudImplementation) GetClusterVolumes(clusterName string) ([]*instance.Volume, error) {
 	volumes, err := s.instanceAPI.ListVolumes(&instance.ListVolumesRequest{
 		Zone: s.zone,
@@ -493,6 +515,17 @@ func (s *scwCloudImplementation) GetClusterVolumes(clusterName string) ([]*insta
 		return nil, fmt.Errorf("failed to list cluster volumes: %w", err)
 	}
 	return volumes.Volumes, nil
+}
+
+func (s *scwCloudImplementation) GetProjectID() (string, error) {
+	projectID, exists := s.client.GetDefaultProjectID()
+	if !exists || projectID == "" {
+		if os.Getenv("SCW_PROFILE") == "REDACTED" {
+			return "00000000-0000-0000-0000-000000000000", nil
+		}
+		return "", fmt.Errorf("no default project ID found in Scaleway client config")
+	}
+	return projectID, nil
 }
 
 func (s *scwCloudImplementation) GetServerIP(serverID string, zone scw.Zone) (string, error) {
@@ -519,6 +552,30 @@ func (s *scwCloudImplementation) GetServerIP(serverID string, zone scw.Zone) (st
 	}
 
 	return ips.IPs[0].Address.IP.String(), nil
+}
+
+func (s *scwCloudImplementation) DeleteBlockVolume(volume *block.Volume) error {
+	err := s.blockAPI.DeleteVolume(&block.DeleteVolumeRequest{
+		VolumeID: volume.ID,
+		Zone:     s.zone,
+	})
+	if err != nil {
+		if is404Error(err) {
+			klog.V(8).Infof("Block volume %q (%s) was already deleted", volume.Name, volume.ID)
+			return nil
+		}
+		return fmt.Errorf("deleting block volume %s: %w", volume.ID, err)
+	}
+
+	_, err = s.blockAPI.WaitForVolume(&block.WaitForVolumeRequest{
+		VolumeID: volume.ID,
+		Zone:     s.zone,
+	})
+	if err != nil && !is404Error(err) {
+		return fmt.Errorf("delete block volume %s: waiting for volume after deletion: %w", volume.ID, err)
+	}
+
+	return nil
 }
 
 func (s *scwCloudImplementation) DeleteDNSRecord(record *domain.Record, clusterName string) error {
@@ -602,21 +659,51 @@ func (s *scwCloudImplementation) DeleteServer(server *instance.Server) error {
 
 	// We detach the etcd volumes
 	for _, volume := range srv.Server.Volumes {
-		volumeResponse, err := s.instanceAPI.GetVolume(&instance.GetVolumeRequest{
-			Zone:     s.zone,
-			VolumeID: volume.ID,
-		})
-		if err != nil {
-			return fmt.Errorf("delete server %s: getting infos for volume %s", server.ID, volume.ID)
-		}
-		for _, tag := range volumeResponse.Volume.Tags {
-			if strings.HasPrefix(tag, TagNameEtcdClusterPrefix) {
-				_, err = s.instanceAPI.DetachVolume(&instance.DetachVolumeRequest{
-					Zone:     s.zone,
-					VolumeID: volume.ID,
-				})
-				if err != nil {
-					return fmt.Errorf("delete server %s: detaching volume %s", server.ID, volume.ID)
+		if volume.VolumeType == instance.VolumeServerVolumeTypeSbsVolume {
+			blockVolume, err := s.blockAPI.GetVolume(&block.GetVolumeRequest{
+				Zone:     s.zone,
+				VolumeID: volume.ID,
+			})
+			if err != nil {
+				if is404Error(err) {
+					continue
+				}
+				return fmt.Errorf("delete server %s: getting block volume info for %s: %w", server.ID, volume.ID, err)
+			}
+			for _, tag := range blockVolume.Tags {
+				if strings.HasPrefix(tag, TagNameEtcdClusterPrefix) {
+					_, err = s.instanceAPI.DetachServerVolume(&instance.DetachServerVolumeRequest{
+						Zone:     s.zone,
+						ServerID: server.ID,
+						VolumeID: volume.ID,
+					})
+					if err != nil {
+						return fmt.Errorf("delete server %s: detaching block volume %s: %w", server.ID, volume.ID, err)
+					}
+					break
+				}
+			}
+		} else {
+			volumeResponse, err := s.instanceAPI.GetVolume(&instance.GetVolumeRequest{
+				Zone:     s.zone,
+				VolumeID: volume.ID,
+			})
+			if err != nil {
+				if is404Error(err) {
+					continue
+				}
+				return fmt.Errorf("delete server %s: getting infos for volume %s: %w", server.ID, volume.ID, err)
+			}
+			for _, tag := range volumeResponse.Volume.Tags {
+				if strings.HasPrefix(tag, TagNameEtcdClusterPrefix) {
+					_, err = s.instanceAPI.DetachVolume(&instance.DetachVolumeRequest{
+						Zone:     s.zone,
+						VolumeID: volume.ID,
+					})
+					if err != nil {
+						return fmt.Errorf("delete server %s: detaching volume %s: %w", server.ID, volume.ID, err)
+					}
+					break
 				}
 			}
 		}

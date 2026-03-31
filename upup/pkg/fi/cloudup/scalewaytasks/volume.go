@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/scaleway/scaleway-sdk-go/api/instance/v1"
+	block "github.com/scaleway/scaleway-sdk-go/api/block/v1alpha1"
 	"github.com/scaleway/scaleway-sdk-go/scw"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
@@ -33,10 +33,10 @@ type Volume struct {
 	ID        *string
 	Lifecycle fi.Lifecycle
 
-	Size *int64
-	Zone *string
-	Tags []string
-	Type *string
+	Size     *int64
+	Zone     *string
+	Tags     []string
+	PerfIops *uint32
 }
 
 var _ fi.CompareWithID = (*Volume)(nil)
@@ -47,10 +47,10 @@ func (v *Volume) CompareWithID() *string {
 
 func (v *Volume) Find(c *fi.CloudupContext) (*Volume, error) {
 	cloud := c.T.Cloud.(scaleway.ScwCloud)
-	instanceService := cloud.InstanceService()
+	blockService := cloud.BlockService()
 	zone := cloud.Zone()
 
-	volumes, err := instanceService.ListVolumes(&instance.ListVolumesRequest{
+	volumes, err := blockService.ListVolumes(&block.ListVolumesRequest{
 		Name: v.Name,
 		Zone: scw.Zone(zone),
 	}, scw.WithAllPages())
@@ -60,14 +60,18 @@ func (v *Volume) Find(c *fi.CloudupContext) (*Volume, error) {
 
 	for _, volume := range volumes.Volumes {
 		if volume.Name == fi.ValueOf(v.Name) {
-			return &Volume{
+			found := &Volume{
 				Name:      fi.PtrTo(volume.Name),
 				ID:        fi.PtrTo(volume.ID),
 				Lifecycle: v.Lifecycle,
 				Size:      fi.PtrTo(int64(volume.Size)),
 				Zone:      fi.PtrTo(string(volume.Zone)),
-				Type:      fi.PtrTo(string(volume.VolumeType)),
-			}, nil
+				Tags:      volume.Tags,
+			}
+			if volume.Specs != nil {
+				found.PerfIops = volume.Specs.PerfIops
+			}
+			return found, nil
 		}
 	}
 
@@ -104,11 +108,12 @@ func (_ *Volume) CheckChanges(actual, expected, changes *Volume) error {
 }
 
 func (_ *Volume) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes *Volume) error {
-	instanceService := t.Cloud.InstanceService()
+	cloud := t.Cloud
+	blockService := cloud.BlockService()
 	zone := scw.Zone(fi.ValueOf(expected.Zone))
 
 	if actual != nil {
-		_, err := instanceService.UpdateVolume(&instance.UpdateVolumeRequest{
+		_, err := blockService.UpdateVolume(&block.UpdateVolumeRequest{
 			Zone:     zone,
 			VolumeID: fi.ValueOf(actual.ID),
 			Name:     expected.Name,
@@ -116,19 +121,31 @@ func (_ *Volume) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes *
 			Size:     scw.SizePtr(scw.Size(fi.ValueOf(expected.Size))),
 		})
 		if err != nil {
-			return fmt.Errorf("updating volume %s (%s): %w", *actual.Name, *actual.ID, err)
+			return fmt.Errorf("updating block volume %s (%s): %w", *actual.Name, *actual.ID, err)
+		}
+	} else {
+		projectID, err := cloud.GetProjectID()
+		if err != nil {
+			return fmt.Errorf("getting project ID for block volume creation: %w", err)
 		}
 
-	} else {
-		_, err := instanceService.CreateVolume(&instance.CreateVolumeRequest{
-			Zone:       zone,
-			Name:       fi.ValueOf(expected.Name),
-			VolumeType: instance.VolumeVolumeType(fi.ValueOf(expected.Type)),
-			Size:       scw.SizePtr(scw.Size(fi.ValueOf(expected.Size))),
-			Tags:       expected.Tags,
+		perfIops := expected.PerfIops
+		if perfIops == nil {
+			perfIops = fi.PtrTo(uint32(5000))
+		}
+
+		_, err = blockService.CreateVolume(&block.CreateVolumeRequest{
+			Zone:      zone,
+			Name:      fi.ValueOf(expected.Name),
+			ProjectID: projectID,
+			FromEmpty: &block.CreateVolumeRequestFromEmpty{
+				Size: scw.Size(fi.ValueOf(expected.Size)),
+			},
+			PerfIops: perfIops,
+			Tags:     expected.Tags,
 		})
 		if err != nil {
-			return fmt.Errorf("rendering volume: %w", err)
+			return fmt.Errorf("creating block volume: %w", err)
 		}
 	}
 
@@ -138,7 +155,6 @@ func (_ *Volume) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes *
 type terraformVolume struct {
 	Name     *string  `cty:"name"`
 	SizeInGB *int     `cty:"size_in_gb"`
-	Type     *string  `cty:"type"`
 	Tags     []string `cty:"tags"`
 	Boot     *bool    `cty:"boot"`
 }
@@ -148,9 +164,8 @@ func (_ *Volume) RenderTerraform(t *terraform.TerraformTarget, actual, expected,
 	tf := &terraformVolume{
 		Name:     expected.Name,
 		SizeInGB: fi.PtrTo(int(fi.ValueOf(expected.Size) / 1e9)),
-		Type:     expected.Type,
 		Tags:     expected.Tags,
 	}
 
-	return t.RenderResource("scaleway_instance_volume", tfName, tf)
+	return t.RenderResource("scaleway_block_volume", tfName, tf)
 }

@@ -216,14 +216,14 @@ resource "scaleway_instance_volume" "etcd-1-etcd-events-scw-minimal-k8s-local" {
   name       = "etcd-1.etcd-events.scw-minimal.k8s.local"
   size_in_gb = 20
   tags       = ["noprefix=kops.k8s.io/cluster=scw-minimal.k8s.local", "noprefix=kops.k8s.io/etcd=events", "noprefix=kops.k8s.io/role=ControlPlane", "noprefix=kops.k8s.io/instance-group=control-plane-fr-par-1"]
-  type       = "b_ssd"
+  type       = "sbs_volume"
 }
 
 resource "scaleway_instance_volume" "etcd-1-etcd-main-scw-minimal-k8s-local" {
   name       = "etcd-1.etcd-main.scw-minimal.k8s.local"
   size_in_gb = 20
   tags       = ["noprefix=kops.k8s.io/cluster=scw-minimal.k8s.local", "noprefix=kops.k8s.io/etcd=main", "noprefix=kops.k8s.io/role=ControlPlane", "noprefix=kops.k8s.io/instance-group=control-plane-fr-par-1"]
-  type       = "b_ssd"
+  type       = "sbs_volume"
 }
 
 resource "scaleway_lb" "api-scw-minimal-k8s-local" {

@@ -23,7 +23,6 @@ import (
 
 	armcompute "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/scaleway/scaleway-sdk-go/api/instance/v1"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/apis/kops/model"
 	"k8s.io/kops/upup/pkg/fi"
@@ -429,18 +428,12 @@ func (b *MasterVolumeBuilder) addScalewayVolume(c *fi.CloudupModelBuilderContext
 		volumeTags = append(volumeTags, fmt.Sprintf("%s=%s", k, v))
 	}
 
-	volumeType := string(instance.VolumeVolumeTypeSbsVolume)
-	if fi.ValueOf(m.VolumeType) != "" {
-		volumeType = fi.ValueOf(m.VolumeType)
-	}
-
 	t := &scalewaytasks.Volume{
 		Name:      fi.PtrTo(name),
 		Lifecycle: b.Lifecycle,
 		Size:      fi.PtrTo(int64(volumeSize) * 1e9),
 		Zone:      &zone,
 		Tags:      volumeTags,
-		Type:      fi.PtrTo(volumeType),
 	}
 	c.AddTask(t)
 }

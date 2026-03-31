@@ -20,18 +20,19 @@ import (
 	"fmt"
 	"strings"
 
+	block "github.com/scaleway/scaleway-sdk-go/api/block/v1alpha1"
 	domain "github.com/scaleway/scaleway-sdk-go/api/domain/v2beta1"
+	iam "github.com/scaleway/scaleway-sdk-go/api/iam/v1alpha1"
+	"github.com/scaleway/scaleway-sdk-go/api/instance/v1"
+	"github.com/scaleway/scaleway-sdk-go/api/lb/v1"
 	"github.com/scaleway/scaleway-sdk-go/scw"
 	"k8s.io/kops/pkg/resources"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/scaleway"
-
-	iam "github.com/scaleway/scaleway-sdk-go/api/iam/v1alpha1"
-	"github.com/scaleway/scaleway-sdk-go/api/instance/v1"
-	"github.com/scaleway/scaleway-sdk-go/api/lb/v1"
 )
 
 const (
+	resourceTypeBlockVolume  = "block-volume"
 	resourceTypeDNSRecord    = "dns-record"
 	resourceTypeLoadBalancer = "load-balancer"
 	resourceTypeServer       = "server"
@@ -47,6 +48,7 @@ func ListResources(cloud scaleway.ScwCloud, clusterInfo resources.ClusterInfo) (
 	clusterName := clusterInfo.Name
 
 	listFunctions := []listFn{
+		listBlockVolumes,
 		listLoadBalancers,
 		listServers,
 		listServerIPs,
@@ -65,6 +67,35 @@ func ListResources(cloud scaleway.ScwCloud, clusterInfo resources.ClusterInfo) (
 		for _, t := range rt {
 			resourceTrackers[t.Type+":"+t.ID] = t
 		}
+	}
+
+	return resourceTrackers, nil
+}
+
+func listBlockVolumes(cloud fi.Cloud, clusterName string) ([]*resources.Resource, error) {
+	c := cloud.(scaleway.ScwCloud)
+	volumes, err := c.GetClusterBlockVolumes(clusterName)
+	if err != nil {
+		return nil, err
+	}
+
+	var resourceTrackers []*resources.Resource
+	for _, volume := range volumes {
+		resourceTracker := &resources.Resource{
+			Name:    volume.Name,
+			ID:      volume.ID,
+			Type:    resourceTypeBlockVolume,
+			Deleter: deleteBlockVolume,
+			Obj:     volume,
+		}
+		for _, ref := range volume.References {
+			if ref.ProductResourceType == "instance_server" {
+				resourceTracker.Blocked = append(resourceTracker.Blocked,
+					resourceTypeServer+":"+ref.ProductResourceID)
+				break
+			}
+		}
+		resourceTrackers = append(resourceTrackers, resourceTracker)
 	}
 
 	return resourceTrackers, nil
@@ -209,6 +240,13 @@ func listVolumes(cloud fi.Cloud, clusterName string) ([]*resources.Resource, err
 	}
 
 	return resourceTrackers, nil
+}
+
+func deleteBlockVolume(cloud fi.Cloud, tracker *resources.Resource) error {
+	c := cloud.(scaleway.ScwCloud)
+	volume := tracker.Obj.(*block.Volume)
+
+	return c.DeleteBlockVolume(volume)
 }
 
 func deleteDNSRecord(cloud fi.Cloud, tracker *resources.Resource, domainName string) error {
