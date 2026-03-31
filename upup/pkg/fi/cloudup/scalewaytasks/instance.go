@@ -296,6 +296,30 @@ func (_ *Instance) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes
 			}
 		}
 
+		// For worker nodes on a private network, remove the public IP.
+		// The Public Gateway provides NAT for outbound internet access.
+		// Control plane nodes keep their public IP for the API LB.
+		if expected.PrivateNetworkID != nil && fi.ValueOf(expected.Role) != scaleway.TagRoleControlPlane {
+			if srv.Server.PublicIP != nil {
+				_, err = instanceService.UpdateIP(&instance.UpdateIPRequest{
+					Zone:   zone,
+					IP:     srv.Server.PublicIP.ID,
+					Server: &instance.NullableStringValue{Null: true},
+				})
+				if err != nil {
+					return fmt.Errorf("error detaching public IP from instance %s: %w", srv.Server.ID, err)
+				}
+				// Delete the dynamic IP to avoid leaking
+				err = instanceService.DeleteIP(&instance.DeleteIPRequest{
+					Zone: zone,
+					IP:   srv.Server.PublicIP.ID,
+				})
+				if err != nil {
+					return fmt.Errorf("error deleting public IP for instance %s: %w", srv.Server.ID, err)
+				}
+			}
+		}
+
 		// We load the cloud-init script in the instance user data
 		err = instanceService.SetServerUserData(&instance.SetServerUserDataRequest{
 			ServerID: srv.Server.ID,
