@@ -429,13 +429,18 @@ func (b *MasterVolumeBuilder) addScalewayVolume(c *fi.CloudupModelBuilderContext
 		volumeTags = append(volumeTags, fmt.Sprintf("%s=%s", k, v))
 	}
 
+	volumeType := string(instance.VolumeVolumeTypeSbsVolume)
+	if fi.ValueOf(m.VolumeType) != "" {
+		volumeType = fi.ValueOf(m.VolumeType)
+	}
+
 	t := &scalewaytasks.Volume{
 		Name:      fi.PtrTo(name),
 		Lifecycle: b.Lifecycle,
 		Size:      fi.PtrTo(int64(volumeSize) * 1e9),
 		Zone:      &zone,
 		Tags:      volumeTags,
-		Type:      fi.PtrTo(string(instance.VolumeVolumeTypeBSSD)),
+		Type:      fi.PtrTo(volumeType),
 	}
 	c.AddTask(t)
 }
