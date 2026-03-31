@@ -245,7 +245,7 @@ func (_ *Instance) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes
 				"0": {
 					Boot:       fi.PtrTo(true),
 					Size:       fi.PtrTo(scw.Size(fi.ValueOf(expected.VolumeSize)) * scw.GB),
-					VolumeType: instance.VolumeVolumeTypeBSSD,
+					VolumeType: instance.VolumeVolumeTypeSbsVolume,
 				},
 			}
 		}
