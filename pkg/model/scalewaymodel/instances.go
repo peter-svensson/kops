@@ -35,7 +35,7 @@ const (
 	defaultControlPlaneRootVolumeSizeGB = 20
 )
 
-// InstanceModelBuilder configures instances for the cluster
+// InstanceModelBuilder configures scaling groups for the cluster
 type InstanceModelBuilder struct {
 	*ScwModelContext
 
@@ -50,7 +50,7 @@ func (b *InstanceModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		name := ig.Name
 		zone, err := scw.ParseZone(ig.Spec.Subnets[0])
 		if err != nil {
-			return fmt.Errorf("error building instance task for %q: %w", name, err)
+			return fmt.Errorf("error building scaling group for %q: %w", name, err)
 		}
 
 		subnets, err := b.GatherSubnets(ig)
@@ -63,53 +63,81 @@ func (b *InstanceModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			return fmt.Errorf("error building bootstrap script for %q: %w", name, err)
 		}
 
-		instanceTags := []string{
+		tags := []string{
 			scaleway.TagClusterName + "=" + b.Cluster.Name,
 			scaleway.TagInstanceGroup + "=" + ig.Name,
 		}
 		for k, v := range b.CloudTags(b.ClusterName(), false) {
-			instanceTags = append(instanceTags, fmt.Sprintf("%s=%s", k, v))
+			tags = append(tags, fmt.Sprintf("%s=%s", k, v))
+		}
+		if ig.IsControlPlane() {
+			tags = append(tags, scaleway.TagNameRolePrefix+"="+scaleway.TagRoleControlPlane)
 		}
 
-		instance := scalewaytasks.Instance{
-			Count:          int(fi.ValueOf(ig.Spec.MinSize)),
-			Name:           fi.PtrTo(name),
-			Lifecycle:      b.Lifecycle,
-			Zone:           fi.PtrTo(string(zone)),
-			CommercialType: fi.PtrTo(ig.Spec.MachineType),
-			Image:          fi.PtrTo(ig.Spec.Image),
-			UserData:       &userData,
-			Tags:           instanceTags,
-		}
-
+		// Private network attachment
+		var privateNetworkIDs []string
 		if len(subnets) > 0 && subnets[0].Type == kops.SubnetTypePrivate {
 			if subnets[0].ID == "" {
 				return fmt.Errorf("private subnet %q for instance group %q must have an ID (Scaleway Private Network UUID)", subnets[0].Name, name)
 			}
-			instance.PrivateNetworkID = fi.PtrTo(subnets[0].ID)
+			privateNetworkIDs = []string{subnets[0].ID}
 		}
 
-		if ig.IsControlPlane() {
-			instance.Tags = append(instance.Tags, scaleway.TagNameRolePrefix+"="+scaleway.TagRoleControlPlane)
-			instance.Role = fi.PtrTo(scaleway.TagRoleControlPlane)
-		} else {
-			instance.Role = fi.PtrTo(scaleway.TagRoleWorker)
-		}
-
-		// If the instance's commercial type is one that has no local storage, we have to specify for the
-		// block storage volume a big enough size (default size is 10GB)
+		// Root volume size for block-storage-only instance types
+		var rootVolumeSize *int
 		for _, commercialType := range commercialTypesWithBlockStorageOnly {
 			if strings.HasPrefix(ig.Spec.MachineType, commercialType) {
 				if ig.IsControlPlane() {
-					instance.VolumeSize = fi.PtrTo(defaultControlPlaneRootVolumeSizeGB)
+					rootVolumeSize = fi.PtrTo(defaultControlPlaneRootVolumeSizeGB)
 				} else {
-					instance.VolumeSize = fi.PtrTo(defaultNodeRootVolumeSizeGB)
+					rootVolumeSize = fi.PtrTo(defaultNodeRootVolumeSizeGB)
 				}
 				break
 			}
 		}
 
-		c.AddTask(&instance)
+		// Create instance template (defines what instances look like)
+		template := &scalewaytasks.InstanceTemplate{
+			Name:              fi.PtrTo(name),
+			Lifecycle:         b.Lifecycle,
+			Zone:              fi.PtrTo(string(zone)),
+			CommercialType:    fi.PtrTo(ig.Spec.MachineType),
+			ImageID:           fi.PtrTo(ig.Spec.Image),
+			UserData:          &userData,
+			Tags:              tags,
+			PrivateNetworkIDs: privateNetworkIDs,
+			RootVolumeSize:    rootVolumeSize,
+		}
+		c.AddTask(template)
+
+		// Determine min/max replicas
+		minReplicas := uint32(fi.ValueOf(ig.Spec.MinSize))
+		maxReplicas := uint32(fi.ValueOf(ig.Spec.MaxSize))
+		if ig.IsControlPlane() {
+			// Control plane is fixed size
+			maxReplicas = minReplicas
+		}
+
+		// Create scaling group (defines how many and LB integration)
+		group := &scalewaytasks.InstanceScalingGroup{
+			Name:             fi.PtrTo(name),
+			Lifecycle:        b.Lifecycle,
+			Zone:             fi.PtrTo(string(zone)),
+			MinReplicas:      fi.PtrTo(minReplicas),
+			MaxReplicas:      fi.PtrTo(maxReplicas),
+			Tags:             tags,
+			InstanceTemplate: template,
+		}
+
+		// LB integration for control plane instances
+		if ig.IsControlPlane() && b.UseLoadBalancerForAPI() {
+			group.LoadBalancer = b.LinkToScalewayLoadBalancer()
+			if len(privateNetworkIDs) > 0 {
+				group.LBPrivateNetworkID = fi.PtrTo(privateNetworkIDs[0])
+			}
+		}
+
+		c.AddTask(group)
 	}
 	return nil
 }

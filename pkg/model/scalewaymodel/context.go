@@ -18,8 +18,17 @@ package scalewaymodel
 
 import (
 	"k8s.io/kops/pkg/model"
+	"k8s.io/kops/upup/pkg/fi"
+	"k8s.io/kops/upup/pkg/fi/cloudup/scalewaytasks"
 )
 
 type ScwModelContext struct {
 	*model.KopsModelContext
+}
+
+// LinkToScalewayLoadBalancer returns a reference to the API load balancer task.
+func (b *ScwModelContext) LinkToScalewayLoadBalancer() *scalewaytasks.LoadBalancer {
+	return &scalewaytasks.LoadBalancer{
+		Name: fi.PtrTo("api." + b.ClusterName()),
+	}
 }
