@@ -44,6 +44,10 @@ func setUpFakeZones() *mockdns.FakeDomainAPI {
 				Domain:    "domain.fr",
 				Subdomain: "zone",
 			},
+			{
+				Domain:    "rootonly.io",
+				Subdomain: "",
+			},
 		},
 	}
 }
@@ -63,16 +67,16 @@ func TestZonesListValid(t *testing.T) {
 	z := &zones{domainAPI: domainAPI}
 
 	zoneList, err := z.List()
-
 	if err != nil {
 		t.Errorf("error listing zones: %v", err)
 	}
-	if len(zoneList) != 3 {
-		t.Errorf("expected at least 1 zone, got 0")
+	if len(zoneList) != 4 {
+		t.Errorf("expected 4 zones, got %d", len(zoneList))
 	}
+	expectedNames := []string{"zone.example.com", "kops.example.com", "zone.domain.fr", "rootonly.io"}
 	for i, zone := range zoneList {
-		if zone.Name() != domainAPI.DNSZones[i].Domain {
-			t.Errorf("expected %s as zone name, got: %s", domainAPI.DNSZones[i].Domain, zone.Name())
+		if zone.Name() != expectedNames[i] {
+			t.Errorf("expected %s as zone name, got: %s", expectedNames[i], zone.Name())
 		}
 	}
 }
@@ -100,14 +104,13 @@ func TestAddValid(t *testing.T) {
 		domainAPI: domainAPI,
 	}
 	outZone, err := zs.Add(inZone)
-
 	if err != nil {
 		t.Errorf("unexpected err: %v", err)
 	}
 	if outZone == nil {
 		t.Errorf("zone is nil, exiting test early")
 	}
-	if outZone.Name() != "dns" {
+	if outZone.Name() != "dns.example.com" {
 		t.Errorf("unexpected zone name: %s", outZone.Name())
 	}
 }
@@ -139,7 +142,6 @@ func TestRemoveValid(t *testing.T) {
 		domainAPI: domainAPI,
 	}
 	err := zs.Remove(inZone)
-
 	if err != nil {
 		t.Errorf("unexpected err: %v", err)
 	}
@@ -165,7 +167,6 @@ func TestNewZone(t *testing.T) {
 	zs := getDNSProviderZones(domainAPI)
 
 	zone, err := zs.New("kops-dns-test")
-
 	if err != nil {
 		t.Errorf("error creating zone: %v", err)
 		return
@@ -216,7 +217,6 @@ func TestNewResourceRecordSet(t *testing.T) {
 
 	rrset, _ := zone.ResourceRecordSets()
 	rrsets, err := rrset.List()
-
 	if err != nil {
 		t.Errorf("error listing resource record sets: %v", err)
 	}

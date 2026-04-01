@@ -113,8 +113,12 @@ func (z *zones) List() ([]dnsprovider.Zone, error) {
 
 	zonesList := []dnsprovider.Zone(nil)
 	for _, dnsZone := range dnsZones.DNSZones {
+		zoneName := dnsZone.Domain
+		if dnsZone.Subdomain != "" {
+			zoneName = dnsZone.Subdomain + "." + dnsZone.Domain
+		}
 		newZone := &zone{
-			name:      dnsZone.Domain,
+			name:      zoneName,
 			domainAPI: z.domainAPI,
 		}
 		zonesList = append(zonesList, newZone)
@@ -144,7 +148,7 @@ func (z *zones) Add(newZone dnsprovider.Zone) (dnsprovider.Zone, error) {
 	klog.V(4).Infof("Added new DNS zone %s to domain %s", newZoneName, domainName)
 
 	return &zone{
-		name:      newZoneName,
+		name:      newZoneName + "." + domainName,
 		domainAPI: z.domainAPI,
 	}, nil
 }
