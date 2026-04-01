@@ -88,8 +88,13 @@ type ScwCloud interface {
 	GetProjectID() (string, error)
 	GetServerIP(serverID string, zone scw.Zone) (string, error)
 
+	GetClusterScalingGroups(clusterName string) ([]*autoscaling.InstanceGroup, error)
+	GetClusterInstanceTemplates(clusterName string) ([]*autoscaling.InstanceTemplate, error)
+
 	DeleteBlockVolume(volume *block.Volume) error
 	DeleteDNSRecord(record *domain.Record, clusterName string) error
+	DeleteInstanceScalingGroup(group *autoscaling.InstanceGroup) error
+	DeleteInstanceTemplate(template *autoscaling.InstanceTemplate) error
 	DeleteLoadBalancer(loadBalancer *lb.LB) error
 	DeleteServer(server *instance.Server) error
 	DeleteSSHKey(sshkey *iam.SSHKey) error
@@ -388,6 +393,14 @@ func (s *scwCloudImplementation) GetCloudGroups(cluster *kops.Cluster, instanceg
 }
 
 func findServerGroups(s *scwCloudImplementation, clusterName string) (map[string][]*instance.Server, error) {
+	// First try scaling-group-based discovery: list groups by cluster tag,
+	// then find instances by autoscaling_id tag
+	scalingGroups, err := s.GetClusterScalingGroups(clusterName)
+	if err == nil && len(scalingGroups) > 0 {
+		return findServerGroupsByScalingGroup(s, scalingGroups)
+	}
+
+	// Fall back to legacy tag-based discovery
 	servers, err := s.GetClusterServers(clusterName, nil)
 	if err != nil {
 		return nil, err
@@ -400,6 +413,45 @@ func findServerGroups(s *scwCloudImplementation, clusterName string) (map[string
 	}
 
 	return serverGroups, nil
+}
+
+func findServerGroupsByScalingGroup(s *scwCloudImplementation, scalingGroups []*autoscaling.InstanceGroup) (map[string][]*instance.Server, error) {
+	// Build map of scaling group ID → IG name
+	groupIDToIGName := make(map[string]string, len(scalingGroups))
+	for _, sg := range scalingGroups {
+		igName := InstanceGroupNameFromTags(sg.Tags)
+		if igName == "" {
+			igName = sg.Name
+		}
+		groupIDToIGName[sg.ID] = igName
+	}
+
+	// List all instances and match by autoscaling_id tag
+	allServers, err := s.instanceAPI.ListServers(&instance.ListServersRequest{
+		Zone: s.zone,
+	}, scw.WithAllPages())
+	if err != nil {
+		return nil, fmt.Errorf("listing servers: %w", err)
+	}
+
+	serverGroups := make(map[string][]*instance.Server)
+	for _, server := range allServers.Servers {
+		asID := autoscalingIDFromTags(server.Tags)
+		if igName, ok := groupIDToIGName[asID]; ok {
+			serverGroups[igName] = append(serverGroups[igName], server)
+		}
+	}
+
+	return serverGroups, nil
+}
+
+func autoscalingIDFromTags(tags []string) string {
+	for _, tag := range tags {
+		if strings.HasPrefix(tag, "autoscaling_id:") {
+			return strings.TrimPrefix(tag, "autoscaling_id:")
+		}
+	}
+	return ""
 }
 
 func buildCloudGroup(s *scwCloudImplementation, ig *kops.InstanceGroup, sg []*instance.Server, nodeMap map[string]*v1.Node) (*cloudinstances.CloudInstanceGroup, error) {
@@ -425,7 +477,16 @@ func buildCloudGroup(s *scwCloudImplementation, ig *kops.InstanceGroup, sg []*in
 		}
 		cloudInstance.State = cloudinstances.State(server.State)
 		cloudInstance.MachineType = server.CommercialType
-		cloudInstance.Roles = append(cloudInstance.Roles, InstanceRoleFromTags(server.Tags))
+		// Scaling group instances don't have kOps role tags; derive from IG spec
+		role := InstanceRoleFromTags(server.Tags)
+		if role == "" {
+			if ig.IsControlPlane() {
+				role = TagRoleControlPlane
+			} else {
+				role = "Node"
+			}
+		}
+		cloudInstance.Roles = append(cloudInstance.Roles, role)
 		ip, err := s.GetServerIP(server.ID, server.Zone)
 		if err != nil {
 			return nil, fmt.Errorf("getting server IP: %w", err)
@@ -470,6 +531,7 @@ func (s *scwCloudImplementation) GetClusterLoadBalancers(clusterName string) ([]
 }
 
 func (s *scwCloudImplementation) GetClusterServers(clusterName string, instanceGroupName *string) ([]*instance.Server, error) {
+	// Try legacy tag-based discovery first
 	tags := []string{TagClusterName + "=" + clusterName}
 	if instanceGroupName != nil {
 		tags = append(tags, fmt.Sprintf("%s=%s", TagInstanceGroup, *instanceGroupName))
@@ -481,12 +543,47 @@ func (s *scwCloudImplementation) GetClusterServers(clusterName string, instanceG
 	}
 	servers, err := s.instanceAPI.ListServers(request, scw.WithAllPages())
 	if err != nil {
-		if instanceGroupName != nil {
-			return nil, fmt.Errorf("failed to list cluster servers named %q: %w", *instanceGroupName, err)
-		}
 		return nil, fmt.Errorf("failed to list cluster servers: %w", err)
 	}
-	return servers.Servers, nil
+	if len(servers.Servers) > 0 {
+		return servers.Servers, nil
+	}
+
+	// Fall back to scaling-group-based discovery
+	scalingGroups, err := s.GetClusterScalingGroups(clusterName)
+	if err != nil || len(scalingGroups) == 0 {
+		return nil, nil
+	}
+
+	groupIDs := make(map[string]string, len(scalingGroups))
+	for _, sg := range scalingGroups {
+		igName := InstanceGroupNameFromTags(sg.Tags)
+		if igName == "" {
+			igName = sg.Name
+		}
+		groupIDs[sg.ID] = igName
+	}
+
+	allServers, err := s.instanceAPI.ListServers(&instance.ListServersRequest{
+		Zone: s.zone,
+	}, scw.WithAllPages())
+	if err != nil {
+		return nil, fmt.Errorf("listing servers for scaling group discovery: %w", err)
+	}
+
+	var matched []*instance.Server
+	for _, server := range allServers.Servers {
+		asID := autoscalingIDFromTags(server.Tags)
+		igName, ok := groupIDs[asID]
+		if !ok {
+			continue
+		}
+		if instanceGroupName != nil && igName != *instanceGroupName {
+			continue
+		}
+		matched = append(matched, server)
+	}
+	return matched, nil
 }
 
 func (s *scwCloudImplementation) GetClusterSSHKeys(clusterName string) ([]*iam.SSHKey, error) {
@@ -576,6 +673,70 @@ func (s *scwCloudImplementation) GetServerIP(serverID string, zone scw.Zone) (st
 	}
 
 	return "", fmt.Errorf("no IP found for server %s (%d NICs checked via IPAM)", serverID, len(srv.Server.PrivateNics))
+}
+
+func (s *scwCloudImplementation) GetClusterScalingGroups(clusterName string) ([]*autoscaling.InstanceGroup, error) {
+	groups, err := s.autoscalingAPI.ListInstanceGroups(&autoscaling.ListInstanceGroupsRequest{
+		Zone: s.zone,
+	}, scw.WithAllPages())
+	if err != nil {
+		return nil, fmt.Errorf("listing instance groups: %w", err)
+	}
+
+	var matched []*autoscaling.InstanceGroup
+	for _, grp := range groups.InstanceGroups {
+		if ClusterNameFromTags(grp.Tags) == clusterName {
+			matched = append(matched, grp)
+		}
+	}
+	return matched, nil
+}
+
+func (s *scwCloudImplementation) GetClusterInstanceTemplates(clusterName string) ([]*autoscaling.InstanceTemplate, error) {
+	templates, err := s.autoscalingAPI.ListInstanceTemplates(&autoscaling.ListInstanceTemplatesRequest{
+		Zone: s.zone,
+	}, scw.WithAllPages())
+	if err != nil {
+		return nil, fmt.Errorf("listing instance templates: %w", err)
+	}
+
+	var matched []*autoscaling.InstanceTemplate
+	for _, tmpl := range templates.InstanceTemplates {
+		if ClusterNameFromTags(tmpl.Tags) == clusterName {
+			matched = append(matched, tmpl)
+		}
+	}
+	return matched, nil
+}
+
+func (s *scwCloudImplementation) DeleteInstanceScalingGroup(group *autoscaling.InstanceGroup) error {
+	err := s.autoscalingAPI.DeleteInstanceGroup(&autoscaling.DeleteInstanceGroupRequest{
+		Zone:            s.zone,
+		InstanceGroupID: group.ID,
+	})
+	if err != nil {
+		if is404Error(err) {
+			klog.V(8).Infof("Instance group %q (%s) was already deleted", group.Name, group.ID)
+			return nil
+		}
+		return fmt.Errorf("deleting instance group %s(%s): %w", group.Name, group.ID, err)
+	}
+	return nil
+}
+
+func (s *scwCloudImplementation) DeleteInstanceTemplate(template *autoscaling.InstanceTemplate) error {
+	err := s.autoscalingAPI.DeleteInstanceTemplate(&autoscaling.DeleteInstanceTemplateRequest{
+		Zone:       s.zone,
+		TemplateID: template.ID,
+	})
+	if err != nil {
+		if is404Error(err) {
+			klog.V(8).Infof("Instance template %q (%s) was already deleted", template.Name, template.ID)
+			return nil
+		}
+		return fmt.Errorf("deleting instance template %s(%s): %w", template.Name, template.ID, err)
+	}
+	return nil
 }
 
 func (s *scwCloudImplementation) DeleteBlockVolume(volume *block.Volume) error {

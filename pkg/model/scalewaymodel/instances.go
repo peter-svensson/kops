@@ -111,11 +111,11 @@ func (b *InstanceModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		c.AddTask(template)
 
 		// Determine min/max replicas
+		// The Scaleway autoscaling API requires max_replicas >= 2
 		minReplicas := uint32(fi.ValueOf(ig.Spec.MinSize))
 		maxReplicas := uint32(fi.ValueOf(ig.Spec.MaxSize))
-		if ig.IsControlPlane() {
-			// Control plane is fixed size
-			maxReplicas = minReplicas
+		if maxReplicas < 2 {
+			maxReplicas = 2
 		}
 
 		// Create scaling group (defines how many and LB integration)
@@ -129,9 +129,11 @@ func (b *InstanceModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			InstanceTemplate: template,
 		}
 
-		// LB integration for control plane instances
-		if ig.IsControlPlane() && b.UseLoadBalancerForAPI() {
+		// The Scaleway autoscaling v1alpha1 API requires a loadbalancer
+		// for all instance groups. Attach the API LB to all groups.
+		if b.UseLoadBalancerForAPI() {
 			group.LoadBalancer = b.LinkToScalewayLoadBalancer()
+			group.LBBackends = b.LBBackends
 			if len(privateNetworkIDs) > 0 {
 				group.LBPrivateNetworkID = fi.PtrTo(privateNetworkIDs[0])
 			}

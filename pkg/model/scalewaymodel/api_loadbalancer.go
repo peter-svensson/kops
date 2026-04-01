@@ -106,6 +106,7 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 	c.AddTask(lbBackendHttps)
 	lbFrontendHttps.Lifecycle = b.Lifecycle
 	c.AddTask(lbFrontendHttps)
+	b.LBBackends = append(b.LBBackends, lbBackendHttps)
 
 	if dns.IsGossipClusterName(b.Cluster.Name) || b.Cluster.UsesPrivateDNS() || b.Cluster.UsesNoneDNS() {
 		loadBalancer.WellKnownServices = append(loadBalancer.WellKnownServices, wellknownservices.KopsController)
@@ -114,6 +115,7 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 		c.AddTask(lbBackendKopsController)
 		lbFrontendKopsController.Lifecycle = b.Lifecycle
 		c.AddTask(lbFrontendKopsController)
+		b.LBBackends = append(b.LBBackends, lbBackendKopsController)
 	}
 
 	return nil

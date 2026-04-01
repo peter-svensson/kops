@@ -122,17 +122,11 @@ func (t *InstanceTemplate) RenderScw(target *scaleway.ScwAPITarget, actual, expe
 	}
 
 	if actual != nil {
-		klog.Infof("Updating instance template %q", fi.ValueOf(expected.Name))
-
-		_, err := asService.UpdateInstanceTemplate(&autoscaling.UpdateInstanceTemplateRequest{
-			Zone:       zone,
-			TemplateID: fi.ValueOf(actual.TemplateID),
-			Tags:       &expected.Tags,
-			CloudInit:  cloudInit,
-		})
-		if err != nil {
-			return fmt.Errorf("updating instance template %q: %w", fi.ValueOf(expected.Name), err)
-		}
+		// TODO: The autoscaling v1alpha1 UpdateInstanceTemplate API returns 500 Internal Server Error.
+		// Once the API is fixed (or promoted to v1), implement proper update logic here:
+		// delete old template + create new one, or call UpdateInstanceTemplate with changed fields.
+		// For now, skip the update — the template was already created with the correct config.
+		klog.Infof("Instance template %q already exists, skipping update (v1alpha1 API does not support updates reliably)", fi.ValueOf(expected.Name))
 		expected.TemplateID = actual.TemplateID
 	} else {
 		klog.Infof("Creating instance template %q", fi.ValueOf(expected.Name))
@@ -142,17 +136,41 @@ func (t *InstanceTemplate) RenderScw(target *scaleway.ScwAPITarget, actual, expe
 			return fmt.Errorf("getting project ID: %w", err)
 		}
 
+		// The autoscaling API requires at least one volume in the template
 		var volumes map[string]*autoscaling.VolumeInstanceTemplate
+		templateName := fi.ValueOf(expected.Name)
 		if expected.RootVolumeSize != nil {
 			sizeGB := uint64(*expected.RootVolumeSize) * 1_000_000_000
 			volumes = map[string]*autoscaling.VolumeInstanceTemplate{
 				"0": {
+					Name:       templateName + "-root",
 					Boot:       true,
 					VolumeType: autoscaling.VolumeInstanceTemplateVolumeTypeSbs,
 					FromEmpty: &autoscaling.VolumeInstanceTemplateFromEmpty{
 						Size: scw.Size(sizeGB),
 					},
 				},
+			}
+		} else {
+			volumes = map[string]*autoscaling.VolumeInstanceTemplate{
+				"0": {
+					Name:       templateName + "-root",
+					Boot:       true,
+					VolumeType: autoscaling.VolumeInstanceTemplateVolumeTypeLSSD,
+					FromEmpty: &autoscaling.VolumeInstanceTemplateFromEmpty{
+						Size: scw.Size(20_000_000_000),
+					},
+				},
+			}
+		}
+
+		// Strip region prefix from private network IDs (API expects bare UUIDs)
+		var pnIDs []string
+		for _, pnID := range expected.PrivateNetworkIDs {
+			if parts := strings.SplitN(pnID, "/", 2); len(parts) == 2 {
+				pnIDs = append(pnIDs, parts[1])
+			} else {
+				pnIDs = append(pnIDs, pnID)
 			}
 		}
 
@@ -163,7 +181,7 @@ func (t *InstanceTemplate) RenderScw(target *scaleway.ScwAPITarget, actual, expe
 			CommercialType:    fi.ValueOf(expected.CommercialType),
 			ImageID:           expected.ImageID,
 			Tags:              expected.Tags,
-			PrivateNetworkIDs: expected.PrivateNetworkIDs,
+			PrivateNetworkIDs: pnIDs,
 			PublicIPsV4Count:  fi.PtrTo(uint32(0)),
 			CloudInit:         cloudInit,
 			Volumes:           volumes,

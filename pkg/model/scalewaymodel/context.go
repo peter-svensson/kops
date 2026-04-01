@@ -24,6 +24,10 @@ import (
 
 type ScwModelContext struct {
 	*model.KopsModelContext
+
+	// LBBackends holds references to LB backend tasks created by the API LB builder,
+	// so the instance scaling group builder can wire them for auto-registration.
+	LBBackends []*scalewaytasks.LBBackend
 }
 
 // LinkToScalewayLoadBalancer returns a reference to the API load balancer task.

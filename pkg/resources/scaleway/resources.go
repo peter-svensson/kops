@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 
+	autoscaling "github.com/scaleway/scaleway-sdk-go/api/autoscaling/v1alpha1"
 	block "github.com/scaleway/scaleway-sdk-go/api/block/v1alpha1"
 	domain "github.com/scaleway/scaleway-sdk-go/api/domain/v2beta1"
 	iam "github.com/scaleway/scaleway-sdk-go/api/iam/v1alpha1"
@@ -32,13 +33,15 @@ import (
 )
 
 const (
-	resourceTypeBlockVolume  = "block-volume"
-	resourceTypeDNSRecord    = "dns-record"
-	resourceTypeLoadBalancer = "load-balancer"
-	resourceTypeServer       = "server"
-	resourceTypeServerIP     = "server-IP"
-	resourceTypeSSHKey       = "ssh-key"
-	resourceTypeVolume       = "volume"
+	resourceTypeBlockVolume      = "block-volume"
+	resourceTypeDNSRecord        = "dns-record"
+	resourceTypeInstanceTemplate = "instance-template"
+	resourceTypeLoadBalancer     = "load-balancer"
+	resourceTypeScalingGroup     = "scaling-group"
+	resourceTypeServer           = "server"
+	resourceTypeServerIP         = "server-IP"
+	resourceTypeSSHKey           = "ssh-key"
+	resourceTypeVolume           = "volume"
 )
 
 type listFn func(fi.Cloud, string) ([]*resources.Resource, error)
@@ -49,7 +52,9 @@ func ListResources(cloud scaleway.ScwCloud, clusterInfo resources.ClusterInfo) (
 
 	listFunctions := []listFn{
 		listBlockVolumes,
+		listInstanceTemplates,
 		listLoadBalancers,
+		listScalingGroups,
 		listServers,
 		listServerIPs,
 		listSSHKeys,
@@ -118,6 +123,52 @@ func listDNSRecords(cloud fi.Cloud, clusterName string) ([]*resources.Resource, 
 				return deleteDNSRecord(cloud, tracker, clusterName)
 			},
 			Obj: record,
+		}
+		resourceTrackers = append(resourceTrackers, resourceTracker)
+	}
+
+	return resourceTrackers, nil
+}
+
+func listScalingGroups(cloud fi.Cloud, clusterName string) ([]*resources.Resource, error) {
+	c := cloud.(scaleway.ScwCloud)
+	groups, err := c.GetClusterScalingGroups(clusterName)
+	if err != nil {
+		return nil, err
+	}
+
+	var resourceTrackers []*resources.Resource
+	for _, group := range groups {
+		resourceTracker := &resources.Resource{
+			Name:    group.Name,
+			ID:      group.ID,
+			Type:    resourceTypeScalingGroup,
+			Deleter: deleteScalingGroup,
+			Obj:     group,
+		}
+		// Scaling groups must be deleted before their templates
+		resourceTracker.Blocks = []string{resourceTypeInstanceTemplate + ":" + group.InstanceTemplateID}
+		resourceTrackers = append(resourceTrackers, resourceTracker)
+	}
+
+	return resourceTrackers, nil
+}
+
+func listInstanceTemplates(cloud fi.Cloud, clusterName string) ([]*resources.Resource, error) {
+	c := cloud.(scaleway.ScwCloud)
+	templates, err := c.GetClusterInstanceTemplates(clusterName)
+	if err != nil {
+		return nil, err
+	}
+
+	var resourceTrackers []*resources.Resource
+	for _, tmpl := range templates {
+		resourceTracker := &resources.Resource{
+			Name:    tmpl.Name,
+			ID:      tmpl.ID,
+			Type:    resourceTypeInstanceTemplate,
+			Deleter: deleteInstanceTemplate,
+			Obj:     tmpl,
 		}
 		resourceTrackers = append(resourceTrackers, resourceTracker)
 	}
@@ -254,6 +305,18 @@ func deleteDNSRecord(cloud fi.Cloud, tracker *resources.Resource, domainName str
 	record := tracker.Obj.(*domain.Record)
 
 	return c.DeleteDNSRecord(record, domainName)
+}
+
+func deleteScalingGroup(cloud fi.Cloud, tracker *resources.Resource) error {
+	c := cloud.(scaleway.ScwCloud)
+	group := tracker.Obj.(*autoscaling.InstanceGroup)
+	return c.DeleteInstanceScalingGroup(group)
+}
+
+func deleteInstanceTemplate(cloud fi.Cloud, tracker *resources.Resource) error {
+	c := cloud.(scaleway.ScwCloud)
+	template := tracker.Obj.(*autoscaling.InstanceTemplate)
+	return c.DeleteInstanceTemplate(template)
 }
 
 func deleteLoadBalancer(cloud fi.Cloud, tracker *resources.Resource) error {

@@ -42,7 +42,7 @@ type InstanceScalingGroup struct {
 
 	InstanceTemplate   *InstanceTemplate
 	LoadBalancer       *LoadBalancer
-	LBBackendIDs       []string
+	LBBackends         []*LBBackend
 	LBPrivateNetworkID *string
 }
 
@@ -96,7 +96,9 @@ func (g *InstanceScalingGroup) Find(context *fi.CloudupContext) (*InstanceScalin
 			}
 			if grp.Loadbalancer != nil {
 				found.LoadBalancer = &LoadBalancer{LBID: fi.PtrTo(grp.Loadbalancer.ID)}
-				found.LBBackendIDs = grp.Loadbalancer.BackendIDs
+				for _, bid := range grp.Loadbalancer.BackendIDs {
+					found.LBBackends = append(found.LBBackends, &LBBackend{ID: fi.PtrTo(bid)})
+				}
 				found.LBPrivateNetworkID = fi.PtrTo(grp.Loadbalancer.PrivateNetworkID)
 			}
 			return found, nil
@@ -137,33 +139,31 @@ func (g *InstanceScalingGroup) RenderScw(target *scaleway.ScwAPITarget, actual, 
 	zone := scw.Zone(fi.ValueOf(expected.Zone))
 
 	var lbConfig *autoscaling.Loadbalancer
+	if expected.LoadBalancer != nil {
+		klog.Infof("InstanceScalingGroup %q: LB Name=%q LBID=%q", fi.ValueOf(expected.Name), fi.ValueOf(expected.LoadBalancer.Name), fi.ValueOf(expected.LoadBalancer.LBID))
+	}
 	if expected.LoadBalancer != nil && expected.LoadBalancer.LBID != nil {
 		pnID := fi.ValueOf(expected.LBPrivateNetworkID)
 		if parts := strings.SplitN(pnID, "/", 2); len(parts) == 2 {
 			pnID = parts[1]
 		}
+		var backendIDs []string
+		for _, backend := range expected.LBBackends {
+			if backend.ID != nil {
+				backendIDs = append(backendIDs, fi.ValueOf(backend.ID))
+			}
+		}
 		lbConfig = &autoscaling.Loadbalancer{
 			ID:               fi.ValueOf(expected.LoadBalancer.LBID),
-			BackendIDs:       expected.LBBackendIDs,
+			BackendIDs:       backendIDs,
 			PrivateNetworkID: pnID,
 		}
 	}
 
 	if actual != nil {
-		klog.Infof("Updating instance scaling group %q", fi.ValueOf(expected.Name))
-
-		_, err := asService.UpdateInstanceGroup(&autoscaling.UpdateInstanceGroupRequest{
-			Zone:            zone,
-			InstanceGroupID: fi.ValueOf(actual.GroupID),
-			Tags:            &expected.Tags,
-			Capacity: &autoscaling.UpdateInstanceGroupRequestCapacity{
-				MinReplicas: expected.MinReplicas,
-				MaxReplicas: expected.MaxReplicas,
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("updating instance scaling group %q: %w", fi.ValueOf(expected.Name), err)
-		}
+		// TODO: Implement proper update once the v1alpha1 API stabilizes.
+		// Currently UpdateInstanceGroup requires cooldown >= 5m and has other constraints.
+		klog.Infof("Instance scaling group %q already exists, skipping update", fi.ValueOf(expected.Name))
 		expected.GroupID = actual.GroupID
 	} else {
 		klog.Infof("Creating instance scaling group %q", fi.ValueOf(expected.Name))
@@ -173,7 +173,7 @@ func (g *InstanceScalingGroup) RenderScw(target *scaleway.ScwAPITarget, actual, 
 			return fmt.Errorf("getting project ID: %w", err)
 		}
 
-		grp, err := asService.CreateInstanceGroup(&autoscaling.CreateInstanceGroupRequest{
+		req := &autoscaling.CreateInstanceGroupRequest{
 			Zone:       zone,
 			ProjectID:  projectID,
 			Name:       fi.ValueOf(expected.Name),
@@ -182,9 +182,15 @@ func (g *InstanceScalingGroup) RenderScw(target *scaleway.ScwAPITarget, actual, 
 			Capacity: &autoscaling.Capacity{
 				MinReplicas: fi.ValueOf(expected.MinReplicas),
 				MaxReplicas: fi.ValueOf(expected.MaxReplicas),
+				CooldownDelay: &scw.Duration{
+					Seconds: 300, // 5 minutes
+				},
 			},
-			Loadbalancer: lbConfig,
-		})
+		}
+		if lbConfig != nil {
+			req.Loadbalancer = lbConfig
+		}
+		grp, err := asService.CreateInstanceGroup(req)
 		if err != nil {
 			return fmt.Errorf("creating instance scaling group: %w", err)
 		}

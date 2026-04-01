@@ -869,7 +869,7 @@ type InstanceGroup struct {
 	Capacity *Capacity `json:"capacity"`
 
 	// Loadbalancer: specification of the Load Balancer linked to the Instance group.
-	Loadbalancer *Loadbalancer `json:"loadbalancer"`
+	Loadbalancer *Loadbalancer `json:"loadbalancer,omitempty"`
 
 	// ErrorMessages: any configuration errors for dependencies (Load Balancer, Private Network, Instance template etc.).
 	ErrorMessages []string `json:"error_messages"`
@@ -1031,7 +1031,7 @@ type CreateInstanceGroupRequest struct {
 	Capacity *Capacity `json:"capacity"`
 
 	// Loadbalancer: specification of the Load Balancer to link to the Instance group.
-	Loadbalancer *Loadbalancer `json:"loadbalancer"`
+	Loadbalancer *Loadbalancer `json:"loadbalancer,omitempty"`
 }
 
 // CreateInstancePolicyRequest: create instance policy request.
