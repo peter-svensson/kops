@@ -21,6 +21,7 @@ import (
 	"os"
 	"strings"
 
+	autoscaling "github.com/scaleway/scaleway-sdk-go/api/autoscaling/v1alpha1"
 	block "github.com/scaleway/scaleway-sdk-go/api/block/v1alpha1"
 	domain "github.com/scaleway/scaleway-sdk-go/api/domain/v2beta1"
 	iam "github.com/scaleway/scaleway-sdk-go/api/iam/v1alpha1"
@@ -60,6 +61,7 @@ type ScwCloud interface {
 	Region() string
 	Zone() string
 
+	AutoscalingService() *autoscaling.API
 	BlockService() *block.API
 	DomainService() *domain.API
 	IamService() *iam.API
@@ -105,6 +107,7 @@ type scwCloudImplementation struct {
 	dns    dnsprovider.Interface
 	tags   map[string]string
 
+	autoscalingAPI *autoscaling.API
 	blockAPI       *block.API
 	domainAPI      *domain.API
 	iamAPI         *iam.API
@@ -161,6 +164,7 @@ func NewScwCloud(tags map[string]string) (ScwCloud, error) {
 		zone:           zone,
 		dns:            dns.NewProvider(domain.NewAPI(scwClient)),
 		tags:           tags,
+		autoscalingAPI: autoscaling.NewAPI(scwClient),
 		blockAPI:       block.NewAPI(scwClient),
 		domainAPI:      domain.NewAPI(scwClient),
 		iamAPI:         iam.NewAPI(scwClient),
@@ -199,6 +203,10 @@ func (s *scwCloudImplementation) Region() string {
 
 func (s *scwCloudImplementation) Zone() string {
 	return string(s.zone)
+}
+
+func (s *scwCloudImplementation) AutoscalingService() *autoscaling.API {
+	return s.autoscalingAPI
 }
 
 func (s *scwCloudImplementation) BlockService() *block.API {
