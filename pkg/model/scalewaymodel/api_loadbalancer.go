@@ -23,7 +23,6 @@ import (
 	"github.com/scaleway/scaleway-sdk-go/scw"
 	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/pkg/dns"
 	"k8s.io/kops/pkg/wellknownports"
 	"k8s.io/kops/pkg/wellknownservices"
 	"k8s.io/kops/upup/pkg/fi"
@@ -108,15 +107,14 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 	c.AddTask(lbFrontendHttps)
 	b.LBBackends = append(b.LBBackends, lbBackendHttps)
 
-	if dns.IsGossipClusterName(b.Cluster.Name) || b.Cluster.UsesPrivateDNS() || b.Cluster.UsesNoneDNS() {
-		loadBalancer.WellKnownServices = append(loadBalancer.WellKnownServices, wellknownservices.KopsController)
-		lbBackendKopsController, lbFrontendKopsController := createLbBackendAndFrontend("kops-controller", wellknownports.KopsControllerPort, zone, loadBalancer)
-		lbBackendKopsController.Lifecycle = b.Lifecycle
-		c.AddTask(lbBackendKopsController)
-		lbFrontendKopsController.Lifecycle = b.Lifecycle
-		c.AddTask(lbFrontendKopsController)
-		b.LBBackends = append(b.LBBackends, lbBackendKopsController)
-	}
+	// kops-controller is always needed for node bootstrap on Scaleway
+	loadBalancer.WellKnownServices = append(loadBalancer.WellKnownServices, wellknownservices.KopsController)
+	lbBackendKopsController, lbFrontendKopsController := createLbBackendAndFrontend("kops-controller", wellknownports.KopsControllerPort, zone, loadBalancer)
+	lbBackendKopsController.Lifecycle = b.Lifecycle
+	c.AddTask(lbBackendKopsController)
+	lbFrontendKopsController.Lifecycle = b.Lifecycle
+	c.AddTask(lbFrontendKopsController)
+	b.LBBackends = append(b.LBBackends, lbBackendKopsController)
 
 	return nil
 }
