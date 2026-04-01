@@ -58,6 +58,8 @@ NODEUP_HASH_ARM64={{ NodeUpSourceHashArm64 }}
 
 {{ SetSysctls }}
 
+{{ SetHostname }}
+
 function ensure-install-dir() {
   INSTALL_DIR="/opt/kops"
   # On ContainerOS, we install under /var/lib/toolbox; /opt is ro and noexec
@@ -183,6 +185,7 @@ type NodeUpScript struct {
 	BootConfig           *nodeup.BootConfig
 	CompressUserData     bool
 	SetSysctls           string
+	SetHostname          string
 	CloudProvider        string
 	ProxyEnv             func() (string, error)
 	EnvironmentVariables func() (string, error)
@@ -249,6 +252,10 @@ func (b *NodeUpScript) Build() (fi.Resource, error) {
 
 		"SetSysctls": func() string {
 			return b.SetSysctls
+		},
+
+		"SetHostname": func() string {
+			return b.SetHostname
 		},
 
 		"ProxyEnv":             b.ProxyEnv,
@@ -473,7 +480,6 @@ func (b *NodeUpScript) WithEnvironmentVariables(cluster *kops.Cluster, ig *kops.
 		}
 		return b.String(), nil
 	}
-
 }
 
 func createProxyEnv(ps *kops.EgressProxySpec) (string, error) {
@@ -544,4 +550,20 @@ func (s *NodeUpScript) WithSysctls() {
 	b.WriteString("sysctl -w net.ipv4.tcp_wmem='4096 87380 16777216' || true\n")
 
 	s.SetSysctls = b.String()
+}
+
+func (s *NodeUpScript) WithHostname(cloudProvider string) {
+	if cloudProvider != "scaleway" {
+		return
+	}
+	// Set hostname from the private IP, matching AWS convention (ip-172-20-0-6)
+	var b bytes.Buffer
+	b.WriteString("# Set hostname from private IP for Scaleway instances\n")
+	b.WriteString("PRIVATE_IP=$(ip -4 addr show scope global | grep inet | head -1 | awk '{print $2}' | cut -d/ -f1)\n")
+	b.WriteString("if [ -n \"${PRIVATE_IP}\" ]; then\n")
+	b.WriteString("  NEW_HOSTNAME=\"ip-$(echo ${PRIVATE_IP} | tr '.' '-')\"\n")
+	b.WriteString("  hostnamectl set-hostname \"${NEW_HOSTNAME}\" || true\n")
+	b.WriteString("  echo \"Set hostname to ${NEW_HOSTNAME}\"\n")
+	b.WriteString("fi\n")
+	s.SetHostname = b.String()
 }

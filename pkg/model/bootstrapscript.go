@@ -147,6 +147,7 @@ func (b *BootstrapScript) kubeEnv(cluster *kops.Cluster, ig *kops.InstanceGroup,
 		nodeupScript.CompressUserData = fi.ValueOf(ig.Spec.CompressUserData)
 
 		nodeupScript.CloudProvider = string(cluster.GetCloudProvider())
+		nodeupScript.WithHostname(nodeupScript.CloudProvider)
 
 		scriptResource, err := nodeupScript.Build()
 		if err != nil {
@@ -303,6 +304,7 @@ func (b *BootstrapScript) Run(c *fi.CloudupContext) error {
 	nodeupScript.CompressUserData = fi.ValueOf(b.ig.Spec.CompressUserData)
 
 	nodeupScript.CloudProvider = string(c.T.Cluster.GetCloudProvider())
+	nodeupScript.WithHostname(nodeupScript.CloudProvider)
 
 	nodeupScriptResource, err := nodeupScript.Build()
 	if err != nil {
