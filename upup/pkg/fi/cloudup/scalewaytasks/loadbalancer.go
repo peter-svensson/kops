@@ -102,18 +102,20 @@ func (l *LoadBalancer) Find(context *fi.CloudupContext) (*LoadBalancer, error) {
 		WellKnownServices: l.WellKnownServices,
 	}
 
-	// Check if the LB already has a private network attached
-	pnResp, err := lbService.ListLBPrivateNetworks(&lb.ZonedAPIListLBPrivateNetworksRequest{
-		Zone: loadBalancer.Zone,
-		LBID: loadBalancer.ID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("listing private networks for load-balancer %s: %w", loadBalancer.ID, err)
-	}
-	for _, pn := range pnResp.PrivateNetwork {
-		if pn.Status == lb.PrivateNetworkStatusReady || pn.Status == lb.PrivateNetworkStatusPending {
-			found.PrivateNetworkID = fi.PtrTo(pn.PrivateNetworkID)
-			break
+	// Check if the LB already has a private network attached (only if expected)
+	if l.PrivateNetworkID != nil {
+		pnResp, err := lbService.ListLBPrivateNetworks(&lb.ZonedAPIListLBPrivateNetworksRequest{
+			Zone: loadBalancer.Zone,
+			LBID: loadBalancer.ID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("listing private networks for load-balancer %s: %w", loadBalancer.ID, err)
+		}
+		for _, pn := range pnResp.PrivateNetwork {
+			if pn.Status == lb.PrivateNetworkStatusReady || pn.Status == lb.PrivateNetworkStatusPending {
+				found.PrivateNetworkID = fi.PtrTo(pn.PrivateNetworkID)
+				break
+			}
 		}
 	}
 

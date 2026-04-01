@@ -25,7 +25,7 @@ import (
 	domain "github.com/scaleway/scaleway-sdk-go/api/domain/v2beta1"
 	iam "github.com/scaleway/scaleway-sdk-go/api/iam/v1alpha1"
 	"github.com/scaleway/scaleway-sdk-go/api/instance/v1"
-	ipam "github.com/scaleway/scaleway-sdk-go/api/ipam/v1alpha1"
+	ipam "github.com/scaleway/scaleway-sdk-go/api/ipam/v1"
 	"github.com/scaleway/scaleway-sdk-go/api/lb/v1"
 	"github.com/scaleway/scaleway-sdk-go/api/marketplace/v2"
 	"github.com/scaleway/scaleway-sdk-go/scw"
@@ -544,7 +544,30 @@ func (s *scwCloudImplementation) GetServerIP(serverID string, zone scw.Zone) (st
 			return ip.Address.String(), nil
 		}
 	}
-	return "", fmt.Errorf("no IP found for server %s", serverID)
+
+	// Fall back to IPAM for private-network-only instances.
+	region, err := zone.Region()
+	if err != nil {
+		return "", fmt.Errorf("no IP found for server %s (unable to parse region: %w)", serverID, err)
+	}
+	for _, nic := range srv.Server.PrivateNics {
+		nicIPs, err := s.ipamAPI.ListIPs(&ipam.ListIPsRequest{
+			Region:           region,
+			PrivateNetworkID: scw.StringPtr(nic.PrivateNetworkID),
+			ResourceID:       scw.StringPtr(nic.ID),
+			ResourceType:     ipam.ResourceTypeInstancePrivateNic,
+			IsIPv6:           scw.BoolPtr(false),
+		}, scw.WithAllPages())
+		if err != nil {
+			klog.Warningf("GetServerIP: IPAM query for NIC %s failed: %v", nic.ID, err)
+			continue
+		}
+		if nicIPs.TotalCount > 0 {
+			return nicIPs.IPs[0].Address.IP.String(), nil
+		}
+	}
+
+	return "", fmt.Errorf("no IP found for server %s (%d NICs checked via IPAM)", serverID, len(srv.Server.PrivateNics))
 }
 
 func (s *scwCloudImplementation) DeleteBlockVolume(volume *block.Volume) error {

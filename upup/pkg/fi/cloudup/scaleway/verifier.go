@@ -25,8 +25,9 @@ import (
 	"strings"
 
 	"github.com/scaleway/scaleway-sdk-go/api/instance/v1"
-	ipam "github.com/scaleway/scaleway-sdk-go/api/ipam/v1alpha1"
+	ipam "github.com/scaleway/scaleway-sdk-go/api/ipam/v1"
 	"github.com/scaleway/scaleway-sdk-go/scw"
+	"k8s.io/klog/v2"
 	kopsv "k8s.io/kops"
 	"k8s.io/kops/pkg/bootstrap"
 	"k8s.io/kops/pkg/wellknownports"
@@ -99,26 +100,33 @@ func (v scalewayVerifier) VerifyToken(ctx context.Context, rawRequest *http.Requ
 	}
 	server := serverResponse.Server
 
-	// Try IPAM first for private IPs, fall back to Instance API for routed-IP instances
+	// Collect all known IPs for this server
 	var addresses []string
-	ips, err := ipam.NewAPI(scwClient).ListIPs(&ipam.ListIPsRequest{
-		Region:     region,
-		ResourceID: fi.PtrTo(server.ID),
-		IsIPv6:     fi.PtrTo(false),
-		Zonal:      fi.PtrTo(zone.String()),
-	}, scw.WithContext(ctx), scw.WithAllPages())
-	if err == nil && ips.TotalCount > 0 {
-		for _, ip := range ips.IPs {
-			addresses = append(addresses, ip.Address.IP.String())
+	if server.PrivateIP != nil && *server.PrivateIP != "" {
+		addresses = append(addresses, *server.PrivateIP)
+	}
+	for _, ip := range server.PublicIPs {
+		if ip != nil && ip.Address != nil {
+			addresses = append(addresses, ip.Address.String())
 		}
-	} else {
-		// Routed-IP instances don't have IPAM entries; use Instance API
-		if server.PrivateIP != nil && *server.PrivateIP != "" {
-			addresses = append(addresses, *server.PrivateIP)
-		}
-		for _, ip := range server.PublicIPs {
-			if ip != nil && ip.Address != nil {
-				addresses = append(addresses, ip.Address.String())
+	}
+	// For private-network-only instances, query IPAM by NIC ID
+	if len(addresses) == 0 {
+		ipamAPI := ipam.NewAPI(scwClient)
+		for _, nic := range server.PrivateNics {
+			nicIPs, err := ipamAPI.ListIPs(&ipam.ListIPsRequest{
+				Region:           region,
+				PrivateNetworkID: fi.PtrTo(nic.PrivateNetworkID),
+				ResourceID:       fi.PtrTo(nic.ID),
+				ResourceType:     ipam.ResourceTypeInstancePrivateNic,
+				IsIPv6:           fi.PtrTo(false),
+			}, scw.WithContext(ctx), scw.WithAllPages())
+			if err != nil {
+				klog.Warningf("verifier: IPAM query for NIC %s failed: %v", nic.ID, err)
+				continue
+			}
+			for _, ip := range nicIPs.IPs {
+				addresses = append(addresses, ip.Address.IP.String())
 			}
 		}
 	}

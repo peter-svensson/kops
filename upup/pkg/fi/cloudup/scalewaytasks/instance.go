@@ -147,7 +147,17 @@ func (s *Instance) Find(c *fi.CloudupContext) (*Instance, error) {
 		UserData:       s.UserData,
 	}
 	if len(server.PrivateNics) > 0 {
-		found.PrivateNetworkID = fi.PtrTo(server.PrivateNics[0].PrivateNetworkID)
+		// The NIC returns a bare UUID; match the expected format which may
+		// include a region prefix (e.g., "fr-par/uuid"). Store the bare UUID
+		// and normalize the expected value during comparison.
+		pnID := server.PrivateNics[0].PrivateNetworkID
+		if s.PrivateNetworkID != nil {
+			// If expected has a region prefix, prepend it to actual for matching
+			if parts := strings.SplitN(fi.ValueOf(s.PrivateNetworkID), "/", 2); len(parts) == 2 {
+				pnID = parts[0] + "/" + pnID
+			}
+		}
+		found.PrivateNetworkID = fi.PtrTo(pnID)
 	}
 	return found, nil
 }

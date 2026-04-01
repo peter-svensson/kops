@@ -20,7 +20,7 @@ import (
 	"fmt"
 
 	"github.com/scaleway/scaleway-sdk-go/api/instance/v1"
-	ipam "github.com/scaleway/scaleway-sdk-go/api/ipam/v1alpha1"
+	ipam "github.com/scaleway/scaleway-sdk-go/api/ipam/v1"
 	"github.com/scaleway/scaleway-sdk-go/scw"
 	"k8s.io/klog/v2"
 	kopsv "k8s.io/kops"
@@ -86,18 +86,43 @@ func NewScwCloudProvider() (*ScwCloudProvider, error) {
 	server := serverResponse.Server
 	klog.V(4).Infof("Found the running server: %q", server.Name)
 
-	ips, err := ipam.NewAPI(scwClient).ListIPs(&ipam.ListIPsRequest{
-		Region:     region,
-		ResourceID: fi.PtrTo(serverID),
-		IsIPv6:     fi.PtrTo(false),
-		Zonal:      fi.PtrTo(zone.String()),
-	}, scw.WithAllPages())
-	if err != nil {
-		return nil, fmt.Errorf("listing server's IPs: %w", err)
+	// Resolve server IP: try Instance API first, fall back to IPAM by NIC
+	var serverIP string
+	if server.PrivateIP != nil && *server.PrivateIP != "" {
+		serverIP = *server.PrivateIP
 	}
-	if ips.TotalCount < 1 {
-		return nil, fmt.Errorf("expected at least 1 IP attached to the server %s", server.ID)
+	if serverIP == "" {
+		for _, pip := range server.PublicIPs {
+			if pip != nil && pip.Address != nil {
+				serverIP = pip.Address.String()
+				break
+			}
+		}
 	}
+	if serverIP == "" {
+		ipamAPI := ipam.NewAPI(scwClient)
+		for _, nic := range server.PrivateNics {
+			nicIPs, err := ipamAPI.ListIPs(&ipam.ListIPsRequest{
+				Region:           region,
+				PrivateNetworkID: fi.PtrTo(nic.PrivateNetworkID),
+				ResourceID:       fi.PtrTo(nic.ID),
+				ResourceType:     ipam.ResourceTypeInstancePrivateNic,
+				IsIPv6:           fi.PtrTo(false),
+			}, scw.WithAllPages())
+			if err != nil {
+				klog.Warningf("protokube: IPAM query for NIC %s failed: %v", nic.ID, err)
+				continue
+			}
+			if nicIPs.TotalCount > 0 {
+				serverIP = nicIPs.IPs[0].Address.IP.String()
+				break
+			}
+		}
+	}
+	if serverIP == "" {
+		return nil, fmt.Errorf("no IP found for server %s", server.ID)
+	}
+	klog.V(4).Infof("Found server IP: %s", serverIP)
 
 	s := &ScwCloudProvider{
 		scwClient: scwClient,
