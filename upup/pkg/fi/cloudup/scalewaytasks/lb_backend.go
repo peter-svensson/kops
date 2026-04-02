@@ -160,13 +160,14 @@ func (l *LBBackend) RenderScw(t *scaleway.ScwAPITarget, actual, expected, change
 			ForwardPortAlgorithm: lb.ForwardPortAlgorithm(fi.ValueOf(expected.ForwardPortAlgorithm)),
 			StickySessions:       lb.StickySessionsType(fi.ValueOf(expected.StickySessions)),
 			HealthCheck: &lb.HealthCheck{
-				CheckMaxRetries: 5,
+				CheckMaxRetries: 3,
 				TCPConfig:       &lb.HealthCheckTCPConfig{},
 				Port:            fi.ValueOf(expected.ForwardPort),
-				CheckTimeout:    scw.TimeDurationPtr(3000),
-				CheckDelay:      scw.TimeDurationPtr(1001),
+				CheckTimeout:    scw.TimeDurationPtr(1000),
+				CheckDelay:      scw.TimeDurationPtr(3000),
 			},
-			ProxyProtocol: lb.ProxyProtocol(fi.ValueOf(expected.ProxyProtocol)),
+			OnMarkedDownAction: lb.OnMarkedDownActionOnMarkedDownActionNone,
+			ProxyProtocol:      lb.ProxyProtocol(fi.ValueOf(expected.ProxyProtocol)),
 		})
 		if err != nil {
 			return fmt.Errorf("creating back-end for load-balancer %s: %w", fi.ValueOf(expected.LoadBalancer.Name), err)

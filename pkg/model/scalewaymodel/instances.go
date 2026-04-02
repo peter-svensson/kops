@@ -129,10 +129,11 @@ func (b *InstanceModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			InstanceTemplate: template,
 		}
 
-		// Only attach the API LB to control plane groups. Workers must
-		// not be in the LB backend pool — it causes kops-controller and
-		// API server requests to round-robin to non-CP instances (EOF).
-		if ig.IsControlPlane() && b.UseLoadBalancerForAPI() {
+		// The Scaleway autoscaling v1alpha1 API requires a loadbalancer
+		// for all instance groups. Workers are registered in the LB
+		// backend pool but the TCP health check on ports 443/3988 marks
+		// them as unhealthy since only the CP runs those services.
+		if b.UseLoadBalancerForAPI() {
 			group.LoadBalancer = b.LinkToScalewayLoadBalancer()
 			group.LBBackends = b.LBBackends
 			if len(privateNetworkIDs) > 0 {
