@@ -663,14 +663,19 @@ func (tf *TemplateFunctions) DNSControllerArgv() ([]string, error) {
 		}
 	}
 
+	// Permit wildcard updates for clouds that use multiple zones (e.g. AWS
+	// private hosted zones). Scaleway's DNS API returns parent zones that
+	// share the same domain name, causing "multiple zones" conflicts with
+	// the wildcard.
+	if cluster.GetCloudProvider() != kops.CloudProviderScaleway {
+		argv = append(argv, "--zone=*/*")
+	}
+
 	if cluster.Spec.IsIPv6Only() {
 		argv = append(argv, "--internal-ipv6")
 	} else {
 		argv = append(argv, "--internal-ipv4")
 	}
-
-	// permit wildcard updates
-	argv = append(argv, "--zone=*/*")
 	// Verbose, but not crazy logging
 	argv = append(argv, "-v=2")
 
