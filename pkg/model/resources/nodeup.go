@@ -552,29 +552,66 @@ func (s *NodeUpScript) WithSysctls() {
 	s.SetSysctls = b.String()
 }
 
-func (s *NodeUpScript) WithHostname(cloudProvider string) {
+// WithScalewayBootstrap configures hostname, providerID, and a systemd oneshot
+// service that injects providerID into kubelet config before kubelet starts.
+func (s *NodeUpScript) WithScalewayBootstrap(cloudProvider string) {
 	if cloudProvider != "scaleway" {
 		return
 	}
-	// Set hostname from private IP and configure provider ID for Scaleway instances.
-	// The hostname matches the AWS convention (ip-172-20-0-6).
-	// The provider ID is written to a file that nodeup reads to configure kubelet.
 	var b bytes.Buffer
-	b.WriteString("# Set hostname and provider ID for Scaleway instances\n")
+
+	// Set hostname from private IP (matches AWS convention: ip-172-20-0-6).
+	b.WriteString("# Set hostname for Scaleway instances\n")
 	b.WriteString("PRIVATE_IP=$(ip -4 addr show scope global | grep inet | head -1 | awk '{print $2}' | cut -d/ -f1)\n")
 	b.WriteString("if [ -n \"${PRIVATE_IP}\" ]; then\n")
 	b.WriteString("  NEW_HOSTNAME=\"ip-$(echo ${PRIVATE_IP} | tr '.' '-')\"\n")
 	b.WriteString("  hostnamectl set-hostname \"${NEW_HOSTNAME}\" || true\n")
 	b.WriteString("  echo \"Set hostname to ${NEW_HOSTNAME}\"\n")
 	b.WriteString("fi\n")
+
+	// Write providerID from Scaleway metadata API (single call to avoid races).
 	b.WriteString("# Set Scaleway provider ID from metadata\n")
-	b.WriteString("SCW_INSTANCE_ID=$(curl -s http://169.254.42.42/conf | grep '^ID=' | cut -d= -f2)\n")
-	b.WriteString("SCW_ZONE=$(curl -s http://169.254.42.42/conf | grep '^LOCATION_ZONE_ID=' | cut -d= -f2)\n")
+	b.WriteString("SCW_CONF=$(curl -s http://169.254.42.42/conf)\n")
+	b.WriteString("SCW_INSTANCE_ID=$(echo \"${SCW_CONF}\" | grep '^ID=' | cut -d= -f2)\n")
+	b.WriteString("SCW_ZONE=$(echo \"${SCW_CONF}\" | grep '^LOCATION_ZONE_ID=' | cut -d= -f2)\n")
 	b.WriteString("if [ -n \"${SCW_INSTANCE_ID}\" ] && [ -n \"${SCW_ZONE}\" ]; then\n")
 	b.WriteString("  PROVIDER_ID=\"scaleway://instance/${SCW_ZONE}/${SCW_INSTANCE_ID}\"\n")
 	b.WriteString("  mkdir -p /opt/kops/conf\n")
 	b.WriteString("  echo \"${PROVIDER_ID}\" > /opt/kops/conf/provider-id\n")
 	b.WriteString("  echo \"Set provider ID to ${PROVIDER_ID}\"\n")
 	b.WriteString("fi\n")
+
+	// Install a systemd oneshot that injects providerID into kubelet.conf before
+	// kubelet starts. The After=nodeup.service ensures the config file exists;
+	// the poll loop is a safety net for timing edge cases.
+	b.WriteString("# Install kubelet-providerid oneshot service\n")
+	b.WriteString("cat > /etc/systemd/system/kubelet-providerid.service << 'UNIT_EOF'\n")
+	b.WriteString("[Unit]\n")
+	b.WriteString("Description=Inject Scaleway providerID into kubelet config\n")
+	b.WriteString("Before=kubelet.service\n")
+	b.WriteString("After=nodeup.service\n")
+	b.WriteString("[Service]\n")
+	b.WriteString("Type=oneshot\n")
+	b.WriteString("RemainAfterExit=true\n")
+	b.WriteString("ExecStart=/bin/bash -c '\\\n")
+	b.WriteString("  KUBELET_CONF=/var/lib/kubelet/kubelet.conf; \\\n")
+	b.WriteString("  PROVIDER_ID_FILE=/opt/kops/conf/provider-id; \\\n")
+	b.WriteString("  for i in $(seq 1 60); do \\\n")
+	b.WriteString("    [ -f \"$KUBELET_CONF\" ] && break; \\\n")
+	b.WriteString("    sleep 2; \\\n")
+	b.WriteString("  done; \\\n")
+	b.WriteString("  if [ -f \"$PROVIDER_ID_FILE\" ] && [ -f \"$KUBELET_CONF\" ]; then \\\n")
+	b.WriteString("    PROVIDER_ID=$(cat $PROVIDER_ID_FILE); \\\n")
+	b.WriteString("    if ! grep -q providerID: $KUBELET_CONF; then \\\n")
+	b.WriteString("      echo \"providerID: $PROVIDER_ID\" >> $KUBELET_CONF; \\\n")
+	b.WriteString("      echo \"Injected providerID $PROVIDER_ID\"; \\\n")
+	b.WriteString("    fi; \\\n")
+	b.WriteString("  fi'\n")
+	b.WriteString("[Install]\n")
+	b.WriteString("WantedBy=kubelet.service\n")
+	b.WriteString("UNIT_EOF\n")
+	b.WriteString("systemctl daemon-reload\n")
+	b.WriteString("systemctl enable kubelet-providerid.service\n")
+
 	s.SetHostname = b.String()
 }
