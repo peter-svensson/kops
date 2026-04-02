@@ -95,6 +95,17 @@ func InstanceRoleFromTags(tags []string) string {
 	return ""
 }
 
+// autoscalingNameFromTags returns the autoscaling group name from instance tags.
+// Scaling group instances have tags like "autoscaling_name:nodes-1".
+func autoscalingNameFromTags(tags []string) string {
+	for _, tag := range tags {
+		if strings.HasPrefix(tag, "autoscaling_name:") {
+			return strings.TrimPrefix(tag, "autoscaling_name:")
+		}
+	}
+	return ""
+}
+
 func getScalewayProfile() (*scw.Profile, error) {
 	scwProfileName := os.Getenv("SCW_PROFILE")
 	if scwProfileName == "" {

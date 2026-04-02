@@ -139,9 +139,16 @@ func (v scalewayVerifier) VerifyToken(ctx context.Context, rawRequest *http.Requ
 		challengeEndPoints = append(challengeEndPoints, net.JoinHostPort(addr, strconv.Itoa(wellknownports.NodeupChallenge)))
 	}
 
+	// Determine instance group name from tags. Scaling group instances
+	// don't have kOps tags but have autoscaling_name:<ig-name>.
+	igName := InstanceGroupNameFromTags(server.Tags)
+	if igName == "" {
+		igName = autoscalingNameFromTags(server.Tags)
+	}
+
 	result := &bootstrap.VerifyResult{
 		NodeName:          server.Name,
-		InstanceGroupName: InstanceGroupNameFromTags(server.Tags),
+		InstanceGroupName: igName,
 		CertificateNames:  addresses,
 		ChallengeEndpoint: challengeEndPoints[0],
 	}
