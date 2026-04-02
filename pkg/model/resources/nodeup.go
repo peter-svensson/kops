@@ -556,14 +556,25 @@ func (s *NodeUpScript) WithHostname(cloudProvider string) {
 	if cloudProvider != "scaleway" {
 		return
 	}
-	// Set hostname from the private IP, matching AWS convention (ip-172-20-0-6)
+	// Set hostname from private IP and configure provider ID for Scaleway instances.
+	// The hostname matches the AWS convention (ip-172-20-0-6).
+	// The provider ID is written to a file that nodeup reads to configure kubelet.
 	var b bytes.Buffer
-	b.WriteString("# Set hostname from private IP for Scaleway instances\n")
+	b.WriteString("# Set hostname and provider ID for Scaleway instances\n")
 	b.WriteString("PRIVATE_IP=$(ip -4 addr show scope global | grep inet | head -1 | awk '{print $2}' | cut -d/ -f1)\n")
 	b.WriteString("if [ -n \"${PRIVATE_IP}\" ]; then\n")
 	b.WriteString("  NEW_HOSTNAME=\"ip-$(echo ${PRIVATE_IP} | tr '.' '-')\"\n")
 	b.WriteString("  hostnamectl set-hostname \"${NEW_HOSTNAME}\" || true\n")
 	b.WriteString("  echo \"Set hostname to ${NEW_HOSTNAME}\"\n")
+	b.WriteString("fi\n")
+	b.WriteString("# Set Scaleway provider ID from metadata\n")
+	b.WriteString("SCW_INSTANCE_ID=$(curl -s http://169.254.42.42/conf | grep '^ID=' | cut -d= -f2)\n")
+	b.WriteString("SCW_ZONE=$(curl -s http://169.254.42.42/conf | grep '^LOCATION_ZONE_ID=' | cut -d= -f2)\n")
+	b.WriteString("if [ -n \"${SCW_INSTANCE_ID}\" ] && [ -n \"${SCW_ZONE}\" ]; then\n")
+	b.WriteString("  PROVIDER_ID=\"scaleway://instance/${SCW_ZONE}/${SCW_INSTANCE_ID}\"\n")
+	b.WriteString("  mkdir -p /opt/kops/conf\n")
+	b.WriteString("  echo \"${PROVIDER_ID}\" > /opt/kops/conf/provider-id\n")
+	b.WriteString("  echo \"Set provider ID to ${PROVIDER_ID}\"\n")
 	b.WriteString("fi\n")
 	s.SetHostname = b.String()
 }

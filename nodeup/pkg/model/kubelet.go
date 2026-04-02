@@ -94,6 +94,11 @@ func (b *KubeletBuilder) Build(c *fi.NodeupModelBuilderContext) error {
 			}
 			providerID = fmt.Sprintf("aws:///%s/%s", instanceIdentity.AvailabilityZone, instanceIdentity.InstanceID)
 		}
+		if b.CloudProvider() == kops.CloudProviderScaleway {
+			if data, err := os.ReadFile("/opt/kops/conf/provider-id"); err == nil {
+				providerID = strings.TrimSpace(string(data))
+			}
+		}
 
 		t, err := buildKubeletComponentConfig(kubeletConfig, providerID)
 		if err != nil {
