@@ -146,8 +146,15 @@ func (v scalewayVerifier) VerifyToken(ctx context.Context, rawRequest *http.Requ
 		igName = autoscalingNameFromTags(server.Tags)
 	}
 
+	// For scaling group instances, derive the node name from the private IP
+	// (matching the hostname set by cloud-init: ip-172-20-0-10).
+	nodeName := server.Name
+	if autoscalingNameFromTags(server.Tags) != "" && len(addresses) > 0 {
+		nodeName = "ip-" + strings.ReplaceAll(addresses[0], ".", "-")
+	}
+
 	result := &bootstrap.VerifyResult{
-		NodeName:          server.Name,
+		NodeName:          nodeName,
 		InstanceGroupName: igName,
 		CertificateNames:  addresses,
 		ChallengeEndpoint: challengeEndPoints[0],
