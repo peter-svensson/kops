@@ -129,9 +129,10 @@ func (b *InstanceModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 			InstanceTemplate: template,
 		}
 
-		// The Scaleway autoscaling v1alpha1 API requires a loadbalancer
-		// for all instance groups. Attach the API LB to all groups.
-		if b.UseLoadBalancerForAPI() {
+		// Only attach the API LB to control plane groups. Workers must
+		// not be in the LB backend pool — it causes kops-controller and
+		// API server requests to round-robin to non-CP instances (EOF).
+		if ig.IsControlPlane() && b.UseLoadBalancerForAPI() {
 			group.LoadBalancer = b.LinkToScalewayLoadBalancer()
 			group.LBBackends = b.LBBackends
 			if len(privateNetworkIDs) > 0 {
