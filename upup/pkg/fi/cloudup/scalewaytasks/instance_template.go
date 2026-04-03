@@ -122,13 +122,19 @@ func (t *InstanceTemplate) RenderScw(target *scaleway.ScwAPITarget, actual, expe
 	}
 
 	if actual != nil {
-		// TODO: The autoscaling v1alpha1 UpdateInstanceTemplate API returns 500 Internal Server Error.
-		// Once the API is fixed (or promoted to v1), implement proper update logic here:
-		// delete old template + create new one, or call UpdateInstanceTemplate with changed fields.
-		// For now, skip the update — the template was already created with the correct config.
-		klog.Infof("Instance template %q already exists, skipping update (v1alpha1 API does not support updates reliably)", fi.ValueOf(expected.Name))
-		expected.TemplateID = actual.TemplateID
-	} else {
+		// The v1alpha1 UpdateInstanceTemplate API returns 500. Delete and
+		// recreate to ensure cloud-init and other config are current.
+		klog.Infof("Deleting existing instance template %q for recreation", fi.ValueOf(expected.Name))
+		err := asService.DeleteInstanceTemplate(&autoscaling.DeleteInstanceTemplateRequest{
+			Zone:       zone,
+			TemplateID: fi.ValueOf(actual.TemplateID),
+		})
+		if err != nil {
+			return fmt.Errorf("deleting instance template %q: %w", fi.ValueOf(expected.Name), err)
+		}
+	}
+
+	{
 		klog.Infof("Creating instance template %q", fi.ValueOf(expected.Name))
 
 		projectID, err := target.Cloud.GetProjectID()
