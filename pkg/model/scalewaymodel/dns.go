@@ -102,6 +102,9 @@ func (b *DNSModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		TTL:       fi.PtrTo(defaultTTL),
 		Lifecycle: b.Lifecycle,
 	}
+	if b.UseLoadBalancerForAPI() {
+		kopsControllerInternal.TargetLoadBalancer = b.LinkToScalewayLoadBalancer()
+	}
 	c.AddTask(kopsControllerInternal)
 
 	return nil

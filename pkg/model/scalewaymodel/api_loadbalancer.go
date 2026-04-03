@@ -101,15 +101,19 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 
 	loadBalancer.WellKnownServices = append(loadBalancer.WellKnownServices, wellknownservices.KubeAPIServer)
 	lbBackendHttps, lbFrontendHttps := createLbBackendAndFrontend("https", wellknownports.KubeAPIServer, zone, loadBalancer)
+	lbBackendHttps.OnMarkedDownAction = fi.PtrTo(string(lb.OnMarkedDownActionOnMarkedDownActionNone))
 	lbBackendHttps.Lifecycle = b.Lifecycle
 	c.AddTask(lbBackendHttps)
 	lbFrontendHttps.Lifecycle = b.Lifecycle
 	c.AddTask(lbFrontendHttps)
 	b.LBBackends = append(b.LBBackends, lbBackendHttps)
 
-	// kops-controller is always needed for node bootstrap on Scaleway
+	// kops-controller backend — all scaling group instances are registered
+	// (Scaleway API requires LB for all groups). Health checks on port 3988
+	// with shutdown_sessions mark non-CP instances as down within ~10s.
 	loadBalancer.WellKnownServices = append(loadBalancer.WellKnownServices, wellknownservices.KopsController)
 	lbBackendKopsController, lbFrontendKopsController := createLbBackendAndFrontend("kops-controller", wellknownports.KopsControllerPort, zone, loadBalancer)
+	lbBackendKopsController.OnMarkedDownAction = fi.PtrTo(string(lb.OnMarkedDownActionShutdownSessions))
 	lbBackendKopsController.Lifecycle = b.Lifecycle
 	c.AddTask(lbBackendKopsController)
 	lbFrontendKopsController.Lifecycle = b.Lifecycle

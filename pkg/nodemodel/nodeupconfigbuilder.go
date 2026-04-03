@@ -394,7 +394,11 @@ func (n *nodeUpConfigBuilder) BuildConfig(ig *kops.InstanceGroup, wellKnownAddre
 	useConfigServer := kopsmodel.UseKopsControllerForNodeConfig(cluster) && !ig.HasAPIServer()
 	if useConfigServer {
 		hosts := []string{"kops-controller.internal." + cluster.ObjectMeta.Name}
-		if len(bootConfig.APIServerIPs) > 0 {
+		// On Scaleway, keep using the kops-controller hostname. The LB
+		// backend pool includes all scaling group instances (API constraint)
+		// so routing by LB IP round-robins to non-CP instances. The hostname
+		// resolves to the CP private IP via DNS on the shared private network.
+		if cluster.GetCloudProvider() != kops.CloudProviderScaleway && len(bootConfig.APIServerIPs) > 0 {
 			hosts = bootConfig.APIServerIPs
 		}
 

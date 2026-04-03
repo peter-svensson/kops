@@ -40,6 +40,7 @@ type LBBackend struct {
 	ForwardPortAlgorithm *string
 	StickySessions       *string
 	ProxyProtocol        *string
+	OnMarkedDownAction   *string
 
 	LoadBalancer *LoadBalancer
 }
@@ -166,7 +167,7 @@ func (l *LBBackend) RenderScw(t *scaleway.ScwAPITarget, actual, expected, change
 				CheckTimeout:    scw.TimeDurationPtr(1000),
 				CheckDelay:      scw.TimeDurationPtr(3000),
 			},
-			OnMarkedDownAction: lb.OnMarkedDownActionOnMarkedDownActionNone,
+			OnMarkedDownAction: lb.OnMarkedDownAction(fi.ValueOf(expected.OnMarkedDownAction)),
 			ProxyProtocol:      lb.ProxyProtocol(fi.ValueOf(expected.ProxyProtocol)),
 		})
 		if err != nil {
