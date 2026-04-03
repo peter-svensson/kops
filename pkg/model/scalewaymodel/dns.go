@@ -67,7 +67,7 @@ func (b *DNSModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		c.AddTask(dnsAPIExternal)
 	}
 
-	if b.UseLoadBalancerForInternalAPI() {
+	if b.UseLoadBalancerForAPI() {
 		recordShortName := strings.TrimSuffix(b.Cluster.APIInternalName(), "."+b.Cluster.Spec.DNSZone)
 		dnsAPIInternal := &scalewaytasks.DNSRecord{
 			Name:               fi.PtrTo(recordShortName),
