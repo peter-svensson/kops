@@ -491,11 +491,14 @@ func buildCloudGroup(s *scwCloudImplementation, ig *kops.InstanceGroup, sg []*in
 			}
 		}
 		cloudInstance.Roles = append(cloudInstance.Roles, role)
-		ip, err := s.GetServerIP(server.ID, server.Zone)
-		if err != nil {
-			return nil, fmt.Errorf("getting server IP: %w", err)
+		if server.State == instance.ServerStateRunning {
+			ip, err := s.GetServerIP(server.ID, server.Zone)
+			if err != nil {
+				klog.Warningf("getting server IP for %s: %v", server.ID, err)
+			} else {
+				cloudInstance.PrivateIP = ip
+			}
 		}
-		cloudInstance.PrivateIP = ip
 	}
 
 	return cloudInstanceGroup, nil
