@@ -161,11 +161,20 @@ func (g *InstanceScalingGroup) RenderScw(target *scaleway.ScwAPITarget, actual, 
 	}
 
 	if actual != nil {
-		// TODO: Implement proper update once the v1alpha1 API stabilizes.
-		// Currently UpdateInstanceGroup requires cooldown >= 5m and has other constraints.
-		klog.Infof("Instance scaling group %q already exists, skipping update", fi.ValueOf(expected.Name))
-		expected.GroupID = actual.GroupID
-	} else {
+		// The v1alpha1 UpdateInstanceGroup API has constraints that make
+		// in-place updates unreliable. Delete and recreate to ensure LB
+		// backend IDs and other config are current.
+		klog.Infof("Deleting existing instance scaling group %q for recreation", fi.ValueOf(expected.Name))
+		err := asService.DeleteInstanceGroup(&autoscaling.DeleteInstanceGroupRequest{
+			Zone:            zone,
+			InstanceGroupID: fi.ValueOf(actual.GroupID),
+		})
+		if err != nil {
+			return fmt.Errorf("deleting instance scaling group %q: %w", fi.ValueOf(expected.Name), err)
+		}
+	}
+
+	{
 		klog.Infof("Creating instance scaling group %q", fi.ValueOf(expected.Name))
 
 		projectID, err := target.Cloud.GetProjectID()
