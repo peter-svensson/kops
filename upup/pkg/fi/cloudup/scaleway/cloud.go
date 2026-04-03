@@ -396,8 +396,12 @@ func findServerGroups(s *scwCloudImplementation, clusterName string) (map[string
 	// First try scaling-group-based discovery: list groups by cluster tag,
 	// then find instances by autoscaling_id tag
 	scalingGroups, err := s.GetClusterScalingGroups(clusterName)
-	if err == nil && len(scalingGroups) > 0 {
+	if err != nil {
+		klog.Warningf("findServerGroups: error listing scaling groups, falling back to legacy discovery: %v", err)
+	} else if len(scalingGroups) > 0 {
 		return findServerGroupsByScalingGroup(s, scalingGroups)
+	} else {
+		klog.V(2).Infof("findServerGroups: no scaling groups found for cluster %q", clusterName)
 	}
 
 	// Fall back to legacy tag-based discovery
