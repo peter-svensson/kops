@@ -36,10 +36,29 @@ type DNSRecord struct {
 	Type      *string
 	TTL       *uint32
 	Lifecycle fi.Lifecycle
+
+	// TargetLoadBalancer references a LoadBalancer task. When set, the
+	// DNS record is created with the LB's first IP instead of Data.
+	TargetLoadBalancer *LoadBalancer
 }
 
-var _ fi.CloudupTask = (*DNSRecord)(nil)
-var _ fi.CompareWithID = (*DNSRecord)(nil)
+var (
+	_ fi.CloudupTask            = (*DNSRecord)(nil)
+	_ fi.CompareWithID          = (*DNSRecord)(nil)
+	_ fi.CloudupHasDependencies = (*DNSRecord)(nil)
+)
+
+func (d *DNSRecord) GetDependencies(tasks map[string]fi.CloudupTask) []fi.CloudupTask {
+	var deps []fi.CloudupTask
+	if d.TargetLoadBalancer != nil {
+		for _, task := range tasks {
+			if _, ok := task.(*LoadBalancer); ok {
+				deps = append(deps, task)
+			}
+		}
+	}
+	return deps
+}
 
 func (d *DNSRecord) CompareWithID() *string {
 	return d.ID
@@ -101,7 +120,7 @@ func (_ *DNSRecord) CheckChanges(actual, expected, changes *DNSRecord) error {
 		if expected.Type == nil {
 			return fi.RequiredField("Type")
 		}
-		if expected.Data == nil {
+		if expected.Data == nil && expected.TargetLoadBalancer == nil {
 			return fi.RequiredField("Data")
 		}
 		if expected.TTL == nil {
@@ -112,6 +131,11 @@ func (_ *DNSRecord) CheckChanges(actual, expected, changes *DNSRecord) error {
 }
 
 func (d *DNSRecord) RenderScw(t *scaleway.ScwAPITarget, actual, expected, changes *DNSRecord) error {
+	// Resolve the LB IP if a TargetLoadBalancer is set.
+	if expected.TargetLoadBalancer != nil && len(expected.TargetLoadBalancer.LBAddresses) > 0 {
+		expected.Data = fi.PtrTo(expected.TargetLoadBalancer.LBAddresses[0])
+	}
+
 	if actual != nil {
 		recordUpdated, err := t.Cloud.DomainService().UpdateDNSZoneRecords(&domain.UpdateDNSZoneRecordsRequest{
 			DNSZone: fi.ValueOf(actual.DNSZone),

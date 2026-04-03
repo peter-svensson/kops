@@ -42,7 +42,19 @@ func (b *DNSModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		return nil
 	}
 
-	if !b.UseLoadBalancerForAPI() {
+	if b.UseLoadBalancerForAPI() {
+		recordShortName := strings.TrimSuffix(b.Cluster.Spec.API.PublicName, "."+b.Cluster.Spec.DNSZone)
+		dnsAPIExternal := &scalewaytasks.DNSRecord{
+			Name:               fi.PtrTo(recordShortName),
+			Data:               fi.PtrTo(placeholderIP),
+			DNSZone:            fi.PtrTo(b.Cluster.Spec.DNSZone),
+			Type:               fi.PtrTo(domain.RecordTypeA.String()),
+			TTL:                fi.PtrTo(defaultTTL),
+			Lifecycle:          b.Lifecycle,
+			TargetLoadBalancer: b.LinkToScalewayLoadBalancer(),
+		}
+		c.AddTask(dnsAPIExternal)
+	} else {
 		recordShortName := strings.TrimSuffix(b.Cluster.Spec.API.PublicName, "."+b.Cluster.Spec.DNSZone)
 		dnsAPIExternal := &scalewaytasks.DNSRecord{
 			Name:      fi.PtrTo(recordShortName),
@@ -55,7 +67,19 @@ func (b *DNSModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		c.AddTask(dnsAPIExternal)
 	}
 
-	if !b.UseLoadBalancerForInternalAPI() {
+	if b.UseLoadBalancerForInternalAPI() {
+		recordShortName := strings.TrimSuffix(b.Cluster.APIInternalName(), "."+b.Cluster.Spec.DNSZone)
+		dnsAPIInternal := &scalewaytasks.DNSRecord{
+			Name:               fi.PtrTo(recordShortName),
+			Data:               fi.PtrTo(placeholderIP),
+			DNSZone:            fi.PtrTo(b.Cluster.Spec.DNSZone),
+			Type:               fi.PtrTo(domain.RecordTypeA.String()),
+			TTL:                fi.PtrTo(defaultTTL),
+			Lifecycle:          b.Lifecycle,
+			TargetLoadBalancer: b.LinkToScalewayLoadBalancer(),
+		}
+		c.AddTask(dnsAPIInternal)
+	} else {
 		recordShortName := strings.TrimSuffix(b.Cluster.APIInternalName(), "."+b.Cluster.Spec.DNSZone)
 		dnsAPIInternal := &scalewaytasks.DNSRecord{
 			Name:      fi.PtrTo(recordShortName),
