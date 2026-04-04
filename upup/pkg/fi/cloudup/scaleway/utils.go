@@ -97,7 +97,7 @@ func InstanceRoleFromTags(tags []string) string {
 
 // autoscalingNameFromTags returns the autoscaling group name from instance tags.
 // Scaling group instances have tags like "autoscaling_name:nodes-1".
-func autoscalingNameFromTags(tags []string) string {
+func AutoscalingNameFromTags(tags []string) string {
 	for _, tag := range tags {
 		if strings.HasPrefix(tag, "autoscaling_name:") {
 			return strings.TrimPrefix(tag, "autoscaling_name:")

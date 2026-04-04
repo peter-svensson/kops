@@ -143,13 +143,13 @@ func (v scalewayVerifier) VerifyToken(ctx context.Context, rawRequest *http.Requ
 	// don't have kOps tags but have autoscaling_name:<ig-name>.
 	igName := InstanceGroupNameFromTags(server.Tags)
 	if igName == "" {
-		igName = autoscalingNameFromTags(server.Tags)
+		igName = AutoscalingNameFromTags(server.Tags)
 	}
 
 	// For scaling group instances, derive the node name from the private IP
 	// (matching the hostname set by cloud-init: ip-172-20-0-10).
 	nodeName := server.Name
-	if autoscalingNameFromTags(server.Tags) != "" && len(addresses) > 0 {
+	if AutoscalingNameFromTags(server.Tags) != "" && len(addresses) > 0 {
 		nodeName = "ip-" + strings.ReplaceAll(addresses[0], ".", "-")
 	}
 

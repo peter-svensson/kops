@@ -101,6 +101,17 @@ func (i *nodeIdentifier) IdentifyNode(ctx context.Context, node *corev1.Node) (*
 
 	labels := map[string]string{}
 	role := scaleway.InstanceRoleFromTags(server.Tags)
+	// Scaling group instances don't have kOps role tags. Fall back to
+	// autoscaling_name tag: control-plane groups contain "control-plane"
+	// in their name by kOps convention.
+	if role == "" {
+		igName := scaleway.AutoscalingNameFromTags(server.Tags)
+		if strings.Contains(igName, "control-plane") {
+			role = string(kops.InstanceGroupRoleControlPlane)
+		} else if igName != "" {
+			role = string(kops.InstanceGroupRoleNode)
+		}
+	}
 	switch kops.InstanceGroupRole(role) {
 	case kops.InstanceGroupRoleControlPlane:
 		labels[nodelabels.RoleLabelControlPlane20] = ""
