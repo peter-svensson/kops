@@ -113,7 +113,7 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 	// with shutdown_sessions mark non-CP instances as down within ~10s.
 	loadBalancer.WellKnownServices = append(loadBalancer.WellKnownServices, wellknownservices.KopsController)
 	lbBackendKopsController, lbFrontendKopsController := createLbBackendAndFrontend("kops-controller", wellknownports.KopsControllerPort, zone, loadBalancer)
-	lbBackendKopsController.OnMarkedDownAction = fi.PtrTo(string(lb.OnMarkedDownActionShutdownSessions))
+	lbBackendKopsController.OnMarkedDownAction = fi.PtrTo(string(lb.OnMarkedDownActionOnMarkedDownActionNone))
 	lbBackendKopsController.Lifecycle = b.Lifecycle
 	c.AddTask(lbBackendKopsController)
 	lbFrontendKopsController.Lifecycle = b.Lifecycle
