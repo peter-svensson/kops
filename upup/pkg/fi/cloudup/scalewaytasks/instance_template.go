@@ -124,8 +124,28 @@ func (t *InstanceTemplate) RenderScw(target *scaleway.ScwAPITarget, actual, expe
 	if actual != nil {
 		// The v1alpha1 UpdateInstanceTemplate API returns 500. Delete and
 		// recreate to ensure cloud-init and other config are current.
+		// First delete any scaling groups that reference this template,
+		// otherwise template deletion is rejected.
+		groups, err := asService.ListInstanceGroups(&autoscaling.ListInstanceGroupsRequest{
+			Zone: zone,
+		}, scw.WithAllPages())
+		if err != nil {
+			return fmt.Errorf("listing scaling groups before template delete: %w", err)
+		}
+		for _, grp := range groups.InstanceGroups {
+			if grp.InstanceTemplateID == fi.ValueOf(actual.TemplateID) {
+				klog.Infof("Deleting scaling group %q (uses template %q)", grp.Name, fi.ValueOf(expected.Name))
+				if err := asService.DeleteInstanceGroup(&autoscaling.DeleteInstanceGroupRequest{
+					Zone:            zone,
+					InstanceGroupID: grp.ID,
+				}); err != nil {
+					return fmt.Errorf("deleting scaling group %q: %w", grp.Name, err)
+				}
+			}
+		}
+
 		klog.Infof("Deleting existing instance template %q for recreation", fi.ValueOf(expected.Name))
-		err := asService.DeleteInstanceTemplate(&autoscaling.DeleteInstanceTemplateRequest{
+		err = asService.DeleteInstanceTemplate(&autoscaling.DeleteInstanceTemplateRequest{
 			Zone:       zone,
 			TemplateID: fi.ValueOf(actual.TemplateID),
 		})
