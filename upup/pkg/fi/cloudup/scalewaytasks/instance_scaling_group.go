@@ -18,6 +18,7 @@ package scalewaytasks
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	autoscaling "github.com/scaleway/scaleway-sdk-go/api/autoscaling/v1alpha1"
@@ -161,20 +162,35 @@ func (g *InstanceScalingGroup) RenderScw(target *scaleway.ScwAPITarget, actual, 
 	}
 
 	if actual != nil {
-		// Only delete-and-recreate if the template has changed. Otherwise
-		// keep the existing group to avoid scale_down events that block on
-		// the 5min cooldown.
+		// Only delete-and-recreate if template or LB backend IDs have
+		// changed. Otherwise keep the existing group to avoid scale_down
+		// events that block on the 5min cooldown.
 		expectedTemplateID := fi.ValueOf(expected.InstanceTemplate.TemplateID)
 		actualTemplateID := ""
 		if actual.InstanceTemplate != nil {
 			actualTemplateID = fi.ValueOf(actual.InstanceTemplate.TemplateID)
 		}
-		if actualTemplateID == expectedTemplateID && actualTemplateID != "" {
+		expectedBackendIDs := []string{}
+		for _, b := range expected.LBBackends {
+			if b.ID != nil {
+				expectedBackendIDs = append(expectedBackendIDs, fi.ValueOf(b.ID))
+			}
+		}
+		actualBackendIDs := []string{}
+		for _, b := range actual.LBBackends {
+			if b.ID != nil {
+				actualBackendIDs = append(actualBackendIDs, fi.ValueOf(b.ID))
+			}
+		}
+		sort.Strings(expectedBackendIDs)
+		sort.Strings(actualBackendIDs)
+		if actualTemplateID == expectedTemplateID && actualTemplateID != "" &&
+			strings.Join(expectedBackendIDs, ",") == strings.Join(actualBackendIDs, ",") {
 			klog.Infof("Instance scaling group %q unchanged, keeping existing group", fi.ValueOf(expected.Name))
 			expected.GroupID = actual.GroupID
 			return nil
 		}
-		klog.Infof("Deleting existing instance scaling group %q for recreation (template changed)", fi.ValueOf(expected.Name))
+		klog.Infof("Deleting existing instance scaling group %q for recreation (template or backends changed)", fi.ValueOf(expected.Name))
 		err := asService.DeleteInstanceGroup(&autoscaling.DeleteInstanceGroupRequest{
 			Zone:            zone,
 			InstanceGroupID: fi.ValueOf(actual.GroupID),
