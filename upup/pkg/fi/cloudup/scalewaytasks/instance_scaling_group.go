@@ -161,10 +161,20 @@ func (g *InstanceScalingGroup) RenderScw(target *scaleway.ScwAPITarget, actual, 
 	}
 
 	if actual != nil {
-		// The v1alpha1 UpdateInstanceGroup API has constraints that make
-		// in-place updates unreliable. Delete and recreate to ensure LB
-		// backend IDs and other config are current.
-		klog.Infof("Deleting existing instance scaling group %q for recreation", fi.ValueOf(expected.Name))
+		// Only delete-and-recreate if the template has changed. Otherwise
+		// keep the existing group to avoid scale_down events that block on
+		// the 5min cooldown.
+		expectedTemplateID := fi.ValueOf(expected.InstanceTemplate.TemplateID)
+		actualTemplateID := ""
+		if actual.InstanceTemplate != nil {
+			actualTemplateID = fi.ValueOf(actual.InstanceTemplate.TemplateID)
+		}
+		if actualTemplateID == expectedTemplateID && actualTemplateID != "" {
+			klog.Infof("Instance scaling group %q unchanged, keeping existing group", fi.ValueOf(expected.Name))
+			expected.GroupID = actual.GroupID
+			return nil
+		}
+		klog.Infof("Deleting existing instance scaling group %q for recreation (template changed)", fi.ValueOf(expected.Name))
 		err := asService.DeleteInstanceGroup(&autoscaling.DeleteInstanceGroupRequest{
 			Zone:            zone,
 			InstanceGroupID: fi.ValueOf(actual.GroupID),

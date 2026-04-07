@@ -17,6 +17,7 @@ limitations under the License.
 package scalewaytasks
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"strings"
@@ -73,7 +74,12 @@ func (t *InstanceTemplate) Find(context *fi.CloudupContext) (*InstanceTemplate, 
 				Tags:              tmpl.Tags,
 				PrivateNetworkIDs: tmpl.PrivateNetworkIDs,
 				Lifecycle:         t.Lifecycle,
-				UserData:          t.UserData,
+			}
+			// Populate UserData from the actual template so the framework
+			// can detect cloud-init changes and trigger recreation only
+			// when needed.
+			if tmpl.CloudInit != nil {
+				found.UserData = fi.PtrTo[fi.Resource](fi.NewBytesResource(*tmpl.CloudInit))
 			}
 			return found, nil
 		}
@@ -122,10 +128,25 @@ func (t *InstanceTemplate) RenderScw(target *scaleway.ScwAPITarget, actual, expe
 	}
 
 	if actual != nil {
-		// The v1alpha1 UpdateInstanceTemplate API returns 500. Delete and
-		// recreate to ensure cloud-init and other config are current.
-		// First delete any scaling groups that reference this template,
-		// otherwise template deletion is rejected.
+		// Compare cloud-init to determine if recreation is needed.
+		var actualCloudInit []byte
+		if actual.UserData != nil {
+			actualCloudInit, _ = fi.ResourceAsBytes(*actual.UserData)
+		}
+		var expectedCloudInit []byte
+		if cloudInit != nil {
+			expectedCloudInit = *cloudInit
+		}
+		if bytes.Equal(actualCloudInit, expectedCloudInit) {
+			klog.Infof("Instance template %q unchanged, keeping existing template", fi.ValueOf(expected.Name))
+			expected.TemplateID = actual.TemplateID
+			return nil
+		}
+
+		// Cloud-init changed: delete-and-recreate. First delete any scaling
+		// groups that reference this template, otherwise template deletion
+		// is rejected.
+		klog.Infof("Instance template %q cloud-init changed, recreating", fi.ValueOf(expected.Name))
 		groups, err := asService.ListInstanceGroups(&autoscaling.ListInstanceGroupsRequest{
 			Zone: zone,
 		}, scw.WithAllPages())
