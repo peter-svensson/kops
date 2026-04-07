@@ -901,14 +901,39 @@ func (s *scwCloudImplementation) DeleteServer(server *instance.Server) error {
 		}
 	}
 
-	// We terminate the server. This stops and deletes the machine immediately
-	_, err = s.instanceAPI.ServerAction(&instance.ServerActionRequest{
-		Zone:     s.zone,
+	// Wait for the server to reach a stable state before deleting.
+	// terminate only works on running/stopped instances, not starting/stopping.
+	stable, err := s.instanceAPI.WaitForServer(&instance.WaitForServerRequest{
 		ServerID: server.ID,
-		Action:   instance.ServerActionTerminate,
+		Zone:     s.zone,
 	})
-	if err != nil && !is404Error(err) {
-		return fmt.Errorf("delete server %s: terminating instance: %w", server.ID, err)
+	if err != nil {
+		if is404Error(err) {
+			return nil
+		}
+		return fmt.Errorf("delete server %s: waiting for stable state: %w", server.ID, err)
+	}
+
+	switch stable.State {
+	case instance.ServerStateStopped, instance.ServerStateStoppedInPlace:
+		// Stopped instances can't be terminated; delete directly.
+		err = s.instanceAPI.DeleteServer(&instance.DeleteServerRequest{
+			Zone:     s.zone,
+			ServerID: server.ID,
+		})
+		if err != nil && !is404Error(err) {
+			return fmt.Errorf("delete server %s: %w", server.ID, err)
+		}
+	default:
+		// Running instances: terminate stops and deletes in one action.
+		_, err = s.instanceAPI.ServerAction(&instance.ServerActionRequest{
+			Zone:     s.zone,
+			ServerID: server.ID,
+			Action:   instance.ServerActionTerminate,
+		})
+		if err != nil && !is404Error(err) {
+			return fmt.Errorf("delete server %s: terminating instance: %w", server.ID, err)
+		}
 	}
 
 	_, err = s.instanceAPI.WaitForServer(&instance.WaitForServerRequest{
@@ -916,7 +941,7 @@ func (s *scwCloudImplementation) DeleteServer(server *instance.Server) error {
 		Zone:     s.zone,
 	})
 	if err != nil && !is404Error(err) {
-		return fmt.Errorf("delete server %s: waiting for instance after termination: %w", server.ID, err)
+		return fmt.Errorf("delete server %s: waiting for instance after deletion: %w", server.ID, err)
 	}
 
 	return nil
