@@ -130,12 +130,16 @@ func (b *InstanceModelBuilder) Build(c *fi.CloudupModelBuilderContext) error {
 		}
 
 		// The Scaleway autoscaling v1alpha1 API requires a loadbalancer
-		// for all instance groups. Workers are registered in the LB
-		// backend pool but the TCP health check on ports 443/3988 marks
-		// them as unhealthy since only the CP runs those services.
+		// for all instance groups. CP groups use the API/kops-controller
+		// backends; worker groups use a separate backend with SSH (port 22)
+		// health check that always passes (workers don't run kube-apiserver).
 		if b.UseLoadBalancerForAPI() {
 			group.LoadBalancer = b.LinkToScalewayLoadBalancer()
-			group.LBBackends = b.LBBackends
+			if ig.IsControlPlane() {
+				group.LBBackends = b.LBBackendsCP
+			} else {
+				group.LBBackends = b.LBBackendsWorker
+			}
 			if len(privateNetworkIDs) > 0 {
 				group.LBPrivateNetworkID = fi.PtrTo(privateNetworkIDs[0])
 			}

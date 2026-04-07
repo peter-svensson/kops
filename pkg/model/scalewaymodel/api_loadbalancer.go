@@ -106,11 +106,9 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 	c.AddTask(lbBackendHttps)
 	lbFrontendHttps.Lifecycle = b.Lifecycle
 	c.AddTask(lbFrontendHttps)
-	b.LBBackends = append(b.LBBackends, lbBackendHttps)
+	b.LBBackendsCP = append(b.LBBackendsCP, lbBackendHttps)
 
-	// kops-controller backend — all scaling group instances are registered
-	// (Scaleway API requires LB for all groups). Health checks on port 3988
-	// with shutdown_sessions mark non-CP instances as down within ~10s.
+	// kops-controller backend for the CP scaling group.
 	loadBalancer.WellKnownServices = append(loadBalancer.WellKnownServices, wellknownservices.KopsController)
 	lbBackendKopsController, lbFrontendKopsController := createLbBackendAndFrontend("kops-controller", wellknownports.KopsControllerPort, zone, loadBalancer)
 	lbBackendKopsController.OnMarkedDownAction = fi.PtrTo(string(lb.OnMarkedDownActionOnMarkedDownActionNone))
@@ -118,7 +116,21 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.CloudupModelBuilderContext) er
 	c.AddTask(lbBackendKopsController)
 	lbFrontendKopsController.Lifecycle = b.Lifecycle
 	c.AddTask(lbFrontendKopsController)
-	b.LBBackends = append(b.LBBackends, lbBackendKopsController)
+	b.LBBackendsCP = append(b.LBBackendsCP, lbBackendKopsController)
+
+	// Worker backend with health check on SSH port 22. Workers MUST be
+	// registered to a LB backend (Scaleway autoscaling API requirement),
+	// but they don't run kube-apiserver or kops-controller, so health
+	// checks on those ports always fail and the autoscaling service
+	// constantly replaces "unhealthy" instances. SSH (port 22) is always
+	// listening on workers, so health checks pass.
+	// Note: no frontend is created — this backend exists only for health
+	// checks, not for routing traffic.
+	lbBackendWorker, _ := createLbBackendAndFrontend("worker-health", 22, zone, loadBalancer)
+	lbBackendWorker.OnMarkedDownAction = fi.PtrTo(string(lb.OnMarkedDownActionOnMarkedDownActionNone))
+	lbBackendWorker.Lifecycle = b.Lifecycle
+	c.AddTask(lbBackendWorker)
+	b.LBBackendsWorker = append(b.LBBackendsWorker, lbBackendWorker)
 
 	return nil
 }

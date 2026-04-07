@@ -25,9 +25,15 @@ import (
 type ScwModelContext struct {
 	*model.KopsModelContext
 
-	// LBBackends holds references to LB backend tasks created by the API LB builder,
-	// so the instance scaling group builder can wire them for auto-registration.
-	LBBackends []*scalewaytasks.LBBackend
+	// LBBackendsCP holds the API LB backends used by control plane scaling groups.
+	// These have health checks on the kube-apiserver and kops-controller ports.
+	LBBackendsCP []*scalewaytasks.LBBackend
+
+	// LBBackendsWorker holds the LB backends used by worker scaling groups.
+	// These have a TCP health check on port 22 (SSH) which is always
+	// available, preventing the autoscaling service from constantly
+	// replacing instances it sees as "unhealthy".
+	LBBackendsWorker []*scalewaytasks.LBBackend
 }
 
 // LinkToScalewayLoadBalancer returns a reference to the API load balancer task.
